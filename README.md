@@ -4,26 +4,50 @@ Meta 광고를 대량으로 찍어내고 → ROAS 높은 것만 남기고 → �
 
 리터니티(returnity.global) 글로벌 퍼포먼스 운영을 전제로 만들었다. 네이밍 규칙, 랜딩 마스터, 목표 ROAS 대역이 전부 기존 시트에서 그대로 옮겨져 있다.
 
+## 대행사와 계정을 같이 쓰는 경우 — 먼저 읽을 것
+
+**roasloop은 어떤 명령에서도 저절로 광고를 끄지 않는다.**
+
+판정은 전체 캠페인에 대해 하고, 결과는 "중단 제안 / 확장 제안" 목록과 보고서로 나온다.
+계정을 실제로 바꾸는 명령은 `launch`와 `apply` 둘뿐이고, 둘 다 `config/ownership.yaml`의
+`mine`에 명시한 캠페인에만 동작한다.
+
+어느 규칙에도 안 걸린 캠페인은 `미분류`가 되고, 미분류는 건드리지 않는다. **모르면 남의 것**이
+이 설계의 전제다. 설정을 깜빡해서 대행사 캠페인이 꺼지는 것보다, 설정을 깜빡해서 아무것도
+안 꺼지는 편이 낫기 때문이다.
+
+```
+구분         광고            지출             매출    ROAS    끌 것    확장
+인하우스       24     3,809,812      6,142,800    1.61      1     0
+대행사        24     3,815,588      7,601,978    1.99      3     2
+
+■ 중단 제안 4개
+  [인하우스] 1개
+  [대행사] 3개  ← roasloop 이 건드리지 않음. 공유용.
+```
+
 ## 루프 한 바퀴
 
 ```
-plan ──▶ launch ──▶ (며칠 태운다) ──▶ harvest ──▶ judge ──▶ prune
-                                                    │
+plan ──▶ launch ──▶ (며칠 태운다) ──▶ harvest ──▶ judge ──▶ report ──▶ 대행사 공유
+                                                    │           │
+                                                    │           └─▶ apply (내 캠페인만)
                                                     ▼
               matrix.yaml 갱신 ◀── breed ◀──────── dna
                     │
                     └──▶ 다시 plan
 ```
 
-| 명령 | 하는 일 |
-|---|---|
-| `plan` | 조합 매트릭스를 펼쳐 광고 명세 CSV 생성. 소재가 없는 조합은 '제작 대기'로 분리 |
-| `launch` | 명세대로 Meta에 대량 생성 (기본 dry-run · 기본 PAUSED) |
-| `harvest` | 광고 단위 성과 수집 |
-| `judge` | ROAS 컷 판정 → KILL / KEEP / SCALE / INSUFFICIENT |
-| `prune` | KILL 판정된 광고를 실제로 중단 (`--yes` 필요) |
-| `dna` | 살아남은 축(카피 앵글·오브제·소재유형) 분석 → 다음 라운드 축 |
-| `breed` | 승자 DNA로 새 카피 + 촬영 기획안 생성 → matrix 블록 |
+| 명령 | 계정 변경 | 하는 일 |
+|---|---|---|
+| `plan` | 없음 | 조합 매트릭스를 펼쳐 광고 명세 CSV 생성. 소재가 없는 조합은 '제작 대기'로 분리 |
+| `launch` | **있음** | 명세대로 Meta에 대량 생성 (기본 dry-run · 기본 PAUSED · 내 캠페인만) |
+| `harvest` | 없음 | 광고 단위 성과 수집 |
+| `judge` | 없음 | ROAS 컷 판정 → KILL / KEEP / SCALE / INSUFFICIENT + 소유별 제안 목록 |
+| `report` | 없음 | 대행사·상급자에게 그대로 보낼 마크다운 보고서 |
+| `dna` | 없음 | 살아남은 축(카피 앵글·오브제·소재유형) 분석 → 다음 라운드 축 |
+| `breed` | 없음 | 승자 DNA로 새 카피 + 촬영 기획안 생성 → matrix 블록 |
+| `apply` | **있음** | 중단 제안을 실제로 반영 (내 캠페인만 · `--yes` 필요) |
 
 ## 설치
 
@@ -44,10 +68,14 @@ roasloop plan --show-pending
 roasloop launch data/runs/20260908/plan_R1.csv
 roasloop launch data/runs/20260908/plan_R1.csv --execute   # PAUSED 로 생성됨
 
-# 3. 며칠 태운 뒤
+# 3. 며칠 태운 뒤 — 여기까지는 계정을 건드리지 않는다
 roasloop harvest --days 14
 roasloop judge
-roasloop prune --yes
+roasloop report --period "2026-08-26 ~ 09-08"    # 대행사에 보낼 보고서
+
+# 내 캠페인의 중단 제안만 반영하려면
+roasloop apply            # 대상만 보여줌
+roasloop apply --yes      # 실제 반영
 
 # 4. 승자에서 다음 라운드 만들기
 roasloop dna
@@ -62,6 +90,7 @@ roasloop breed -n 8 --reviews data/reviews.txt
 | `config/landing.yaml` | 랜딩ID ↔ URL |
 | `config/account.yaml` | 계정 기본값, UTM 정책, 전환 action_type |
 | `config/rules.yaml` | ROAS 컷 규칙 — 목표선, 게이트, 신뢰수준 |
+| `config/ownership.yaml` | 어느 캠페인이 내 것이고 어느 것이 대행사 것인지 |
 | `config/matrix.yaml` | 이번 라운드에 무엇을 몇 개 찍을지 |
 
 ## 판정 로직 — 왜 그냥 ROAS로 자르지 않는가
@@ -130,9 +159,11 @@ utm_source=meta&utm_medium=paid_social&utm_campaign={{campaign.name}}&utm_conten
 
 ## 안전장치
 
+- **판정·보고 명령(`judge`, `report`, `dna`, `breed`)은 계정을 전혀 건드리지 않는다**
+- 계정을 바꾸는 `launch`와 `apply`는 `ownership.yaml`의 `mine`에 걸린 캠페인에만 동작한다
 - `launch`는 기본 dry-run. 실제 생성은 `--execute`
 - 생성된 광고는 기본 PAUSED. 켜려면 `--activate`
-- `prune`은 기본적으로 대상만 보여준다. 실제 중단은 `--yes`
+- `apply`는 기본적으로 대상만 보여준다. 실제 중단은 `--yes`
 - 같은 이름의 캠페인·광고셋이 있으면 재사용한다 (중복 생성 방지)
 - 집행한 광고명은 `data/history.txt`에 쌓이고, 다음 `plan`에서 같은 조합을 자동으로 제외한다
 

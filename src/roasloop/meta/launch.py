@@ -49,6 +49,7 @@ class Launcher:
         instagram_id: str = "",
         dry_run: bool = True,
         status: str = "PAUSED",
+        ownership=None,
     ):
         self.client = client
         self.page_id = page_id
@@ -56,6 +57,8 @@ class Launcher:
         self.instagram_id = instagram_id
         self.dry_run = dry_run
         self.status = status
+        #: 캠페인 소유 구분기. 대행사 캠페인에 광고를 만드는 것도 막아야 한다.
+        self.ownership = ownership
         self._campaigns: dict[str, str] = {}
         self._adsets: dict[str, str] = {}
 
@@ -170,6 +173,8 @@ class Launcher:
 
         for spec in ready:
             try:
+                if self.ownership is not None:
+                    self.ownership.require_mine(spec.campaign_name)
                 cid = self.ensure_campaign(spec.campaign_name, campaign_objective, campaign_budget)
                 aid = self.ensure_adset(cid, spec.adset_name, adset_configs.get(spec.adset_name, {}))
                 if self.dry_run:

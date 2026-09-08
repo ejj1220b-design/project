@@ -52,6 +52,7 @@ class Config:
     landings: dict
     account: dict
     rules: dict
+    ownership_config: dict = field(default_factory=dict)
     matrix: dict = field(default_factory=dict)
     config_dir: Path = DEFAULT_CONFIG_DIR
 
@@ -59,11 +60,13 @@ class Config:
     def load(cls, config_dir: Path | str | None = None) -> "Config":
         d = Path(config_dir) if config_dir else DEFAULT_CONFIG_DIR
         matrix_path = d / "matrix.yaml"
+        ownership_path = d / "ownership.yaml"
         return cls(
             taxonomy=_load(d / "taxonomy.yaml"),
             landings=_load(d / "landing.yaml").get("landings", {}),
             account=_load(d / "account.yaml"),
             rules=_load(d / "rules.yaml"),
+            ownership_config=_load(ownership_path) if ownership_path.exists() else {},
             matrix=_load(matrix_path) if matrix_path.exists() else {},
             config_dir=d,
         )
@@ -84,3 +87,9 @@ class Config:
     @property
     def currency(self) -> str:
         return self.account.get("account", {}).get("currency", "KRW")
+
+    @property
+    def ownership(self):
+        """캠페인 소유 구분기. 설정이 없으면 전부 '미분류' = 아무것도 건드리지 않는다."""
+        from .ownership import Ownership
+        return Ownership(self.ownership_config)

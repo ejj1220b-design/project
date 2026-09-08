@@ -6,9 +6,14 @@
     roasloop launch   명세대로 Meta 에 대량 생성 (기본 dry-run · 기본 PAUSED)
     roasloop harvest  성과 수집 → data/runs/<날짜>/perf.json
     roasloop judge    ROAS 컷 판정 → 표 + CSV
-    roasloop prune    KILL 판정된 광고를 실제로 끈다 (--yes 필요)
+    roasloop report   대행사·상급자에게 공유할 보고서 (마크다운)
     roasloop dna      살아남은 축 분석 → 다음 라운드 축
     roasloop breed    승자 DNA → 새 카피·기획안 → matrix 블록
+    roasloop apply    중단 제안을 실제로 반영 (내 캠페인만, --yes 필요)
+
+roasloop 은 어떤 명령에서도 저절로 광고를 끄지 않는다. judge/report 는 읽기 전용이고,
+계정을 바꾸는 것은 launch 와 apply 둘뿐이며 둘 다 config/ownership.yaml 의
+mine 에 걸린 캠페인에만 동작한다.
 """
 
 from __future__ import annotations
@@ -124,6 +129,7 @@ def cmd_launch(args, cfg: Config) -> None:
         client, creds.page_id, creds.pixel_id, creds.instagram_id,
         dry_run=not args.execute,
         status="ACTIVE" if args.activate else "PAUSED",
+        ownership=cfg.ownership,
     )
     result = launcher.launch(
         specs, adset_configs,
@@ -190,45 +196,95 @@ def cmd_judge(args, cfg: Config) -> None:
     run = Path(args.run) if args.run else _latest_run()
     perfs = _load_perf(run / "perf.json")
     judgements = judge_all(perfs, cfg.rules)
+    own = cfg.ownership
 
     print(rp.judgement_summary(judgements, cfg.currency))
     print()
-    print(rp.judgement_table(judgements, cfg.currency, limit=args.limit))
+    print(rp.ownership_summary(judgements, own, cfg.currency))
+    print()
+    print(rp.action_list(judgements, own, cfg.currency))
+    if not args.brief:
+        print()
+        print(rp.judgement_table(judgements, cfg.currency, limit=args.limit))
 
     out = rp.write_judgements_csv(judgements, run / "judgement.csv")
-    (run / "kill_ids.txt").write_text(
-        "\n".join(j.perf.ad_id for j in judgements if j.verdict == Verdict.KILL),
-        encoding="utf-8",
-    )
+    mine_kills = [
+        j.perf.ad_id for j in judgements
+        if j.verdict == Verdict.KILL and own.is_mine(j.perf.campaign_name)
+    ]
+    (run / "kill_ids_mine.txt").write_text("\n".join(mine_kills), encoding="utf-8")
     print(f"\n→ {out}")
-    print(f"→ {run / 'kill_ids.txt'}  (roasloop prune 이 읽습니다)")
+    print("\n※ 이 명령은 광고 상태를 바꾸지 않습니다. 위 목록은 제안입니다.")
+    if mine_kills:
+        print(f"   내 캠페인 중단 제안 {len(mine_kills)}개는 `roasloop apply --yes` 로 반영할 수 있습니다.")
 
 
-def cmd_prune(args, cfg: Config) -> None:
-    from .meta.client import MetaClient
-    from .meta.launch import pause_ads
+def cmd_report(args, cfg: Config) -> None:
+    """대행사·상급자에게 그대로 보낼 보고서를 만든다. 계정은 건드리지 않는다."""
+    from . import dna as dna_mod
 
     run = Path(args.run) if args.run else _latest_run()
-    ids = [l.strip() for l in (run / "kill_ids.txt").read_text(encoding="utf-8").splitlines() if l.strip()]
-    if not ids:
-        print("끌 광고가 없습니다.")
+    judgements = judge_all(_load_perf(run / "perf.json"), cfg.rules)
+    conf = cfg.rules.get("confidence", {})
+    dna_report = None
+    if not args.no_dna:
+        dna_report = dna_mod.build(
+            judgements,
+            level=float(conf.get("level", 0.80)),
+            fallback_aov=float(conf.get("fallback_aov", 0)),
+        )
+
+    text = rp.markdown_report(
+        judgements, dna_report, cfg.ownership,
+        period=args.period or run.name, currency=cfg.currency,
+    )
+    out = rp.write_markdown(text, Path(args.out) if args.out else run / "report.md")
+    print(f"→ {out}")
+    if args.show:
+        print()
+        print(text)
+
+
+def cmd_apply(args, cfg: Config) -> None:
+    """중단 제안을 실제로 반영한다. 내 캠페인에만 동작한다."""
+    from .meta.client import MetaClient
+    from .meta.launch import pause_ads
+    from .ownership import Owner
+
+    run = Path(args.run) if args.run else _latest_run()
+    judgements = judge_all(_load_perf(run / "perf.json"), cfg.rules)
+    own = cfg.ownership
+
+    kills = [j for j in judgements if j.verdict == Verdict.KILL]
+    groups = own.split(kills, key=lambda j: j.perf.campaign_name)
+    mine, blocked = groups[Owner.MINE], groups[Owner.AGENCY] + groups[Owner.UNKNOWN]
+
+    if blocked:
+        print(f"■ 제외 {len(blocked)}개 — 내 캠페인이 아니라서 건드리지 않습니다")
+        for j in blocked[:10]:
+            print(f"    · [{own.label(j.perf.campaign_name)}] {j.perf.ad_name}")
+        if len(blocked) > 10:
+            print(f"    ... 외 {len(blocked) - 10}개")
+        print("    → 이 항목들은 보고서로 공유하세요: roasloop report\n")
+
+    if not mine:
+        print("내 캠페인에는 중단 제안이 없습니다.")
         return
 
-    perfs = {p.ad_id: p for p in _load_perf(run / "perf.json")}
-    spend = sum(perfs[i].spend for i in ids if i in perfs)
-    print(f"KILL 대상 {len(ids)}개 · 해당 기간 지출 {spend:,.0f} {cfg.currency}")
-    for i in ids[:20]:
-        if i in perfs:
-            print(f"  ✕ {perfs[i].ad_name}  (ROAS {perfs[i].roas:.2f})")
-    if len(ids) > 20:
-        print(f"  ... 외 {len(ids) - 20}개")
+    spend = sum(j.perf.spend for j in mine)
+    print(f"■ 중단 대상 {len(mine)}개 · 해당 기간 지출 {spend:,.0f} {cfg.currency}")
+    for j in mine:
+        print(f"    ✕ {j.perf.ad_name}")
+        print(f"      ROAS {j.interval.point:.2f} (구간 {j.interval.lower:.2f}~{j.interval.upper:.2f}) "
+              f"· 구매 {j.perf.purchases} · {j.reason}")
 
     if not args.yes:
-        print("\n실제로 끄려면 --yes 를 붙이세요.")
+        print("\n실제로 중단하려면 --yes 를 붙이세요. 지금은 아무것도 바뀌지 않았습니다.")
         return
 
     creds = MetaCredentials.from_env()
-    ok, failed = pause_ads(MetaClient(creds.access_token, creds.ad_account_id), ids)
+    ok, failed = pause_ads(MetaClient(creds.access_token, creds.ad_account_id),
+                           [j.perf.ad_id for j in mine])
     print(f"\n중단 완료 {len(ok)}개 / 실패 {len(failed)}개")
     for ad_id, err in failed:
         print(f"  ✕ {ad_id}: {err}")
@@ -351,15 +407,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--stamp")
     sp.set_defaults(func=cmd_harvest)
 
-    sp = sub.add_parser("judge", help="ROAS 컷 판정")
+    sp = sub.add_parser("judge", help="ROAS 컷 판정 (읽기 전용)")
     sp.add_argument("--run", help="런 디렉터리 (기본 최신)")
     sp.add_argument("--limit", type=int, default=0, help="표에 출력할 행 수")
+    sp.add_argument("--brief", action="store_true", help="요약과 제안만 보고 전체 표는 생략")
     sp.set_defaults(func=cmd_judge)
 
-    sp = sub.add_parser("prune", help="KILL 판정 광고 중단")
+    sp = sub.add_parser("report", help="공유용 보고서 생성 (읽기 전용)")
     sp.add_argument("--run")
-    sp.add_argument("--yes", action="store_true", help="실제로 중단")
-    sp.set_defaults(func=cmd_prune)
+    sp.add_argument("--out", help="저장 경로 (기본 <런>/report.md)")
+    sp.add_argument("--period", help="보고서 제목에 넣을 기간 표기")
+    sp.add_argument("--no-dna", action="store_true", help="승자 축 분석 섹션 생략")
+    sp.add_argument("--show", action="store_true", help="화면에도 전문 출력")
+    sp.set_defaults(func=cmd_report)
 
     sp = sub.add_parser("dna", help="승자 축 분석")
     sp.add_argument("--run")
@@ -367,6 +427,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--keep-top", type=int, default=2, help="다음 라운드에 넘길 축당 값 개수")
     sp.add_argument("--min-ads", type=int, default=2, help="이 개수 미만인 값은 순위에서 뺀다")
     sp.set_defaults(func=cmd_dna)
+
+    sp = sub.add_parser("apply", help="중단 제안 반영 (내 캠페인만)")
+    sp.add_argument("--run")
+    sp.add_argument("--yes", action="store_true", help="실제로 중단 (없으면 대상만 보여줌)")
+    sp.set_defaults(func=cmd_apply)
 
     sp = sub.add_parser("breed", help="승자 DNA → 새 카피·기획안")
     sp.add_argument("--run")
@@ -390,6 +455,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args.func(args, Config.load(args.config))
     except (RuntimeError, FileNotFoundError, ValueError) as exc:
+        # OwnershipError 는 RuntimeError 하위라 여기서 함께 잡힌다
         print(f"오류: {exc}", file=sys.stderr)
         return 1
     return 0
