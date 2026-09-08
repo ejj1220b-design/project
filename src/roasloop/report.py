@@ -169,6 +169,7 @@ def markdown_report(
     ownership,
     period: str = "",
     currency: str = "KRW",
+    excluded: list[tuple] | None = None,
 ) -> str:
     """대행사·상급자에게 그대로 보낼 수 있는 보고서."""
     from .ownership import Owner
@@ -180,7 +181,7 @@ def markdown_report(
 
     md = [f"# 소재 성과 판정 보고서{f' — {period}' if period else ''}", ""]
     md.append(
-        f"광고 {len(judgements)}개 · 지출 {total_spend:,.0f} {currency} · "
+        f"판정 대상 광고 {len(judgements)}개 · 지출 {total_spend:,.0f} {currency} · "
         f"매출 {total_rev:,.0f} {currency} · ROAS {(total_rev / total_spend if total_spend else 0):.2f}"
     )
     md.append("")
@@ -194,6 +195,17 @@ def markdown_report(
         r = s[v.value]
         md.append(f"| {names[v]} | {r['count']} | {r['spend']:,.0f} | {r['revenue']:,.0f} "
                   f"| {r['roas']:.2f} | {r['purchases']} |")
+
+    if excluded:
+        from .scope import summarize_excluded
+
+        ex_spend = sum(p.spend for p, _ in excluded)
+        md += ["", "## 판정 제외", "",
+               f"아래 {len(excluded)}개 광고(지출 {ex_spend:,.0f} {currency})는 전환을 측정할 수 없어 "
+               "ROAS 계산과 판정에서 제외했습니다. 지출은 참고용으로만 표기합니다.", "",
+               "| 개수 | 지출 | 사유 |", "|---:|---:|---|"]
+        for b in summarize_excluded(excluded):
+            md.append(f"| {b['count']} | {b['spend']:,.0f} | {b['reason']} |")
 
     md += ["", "## 캠페인 소유별", "", "| 구분 | 광고 | 지출 | 매출 | ROAS | 중단 제안 | 확장 제안 |",
            "|---|---:|---:|---:|---:|---:|---:|"]

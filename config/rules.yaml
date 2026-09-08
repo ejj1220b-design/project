@@ -30,3 +30,28 @@ guards:
   # 부가 경고. 판정을 바꾸지는 않고 리포트에 사유로 남는다.
   max_frequency: 3.0
   min_ctr: 0.008
+
+measurement:
+  # ROAS 로 판정하지 않을 캠페인.
+  #
+  # 여기 걸린 캠페인은 판정에서 빠지지만, 지출은 "측정 제외" 로 따로 집계되어 보고서에 남는다.
+  # 없는 셈 치는 게 아니라, 다른 잣대로 봐야 하는 것들을 갈라내는 것이다.
+  exclude:
+    - pattern: '_AMZ_'
+      reason: '아마존 — 랜딩이 아마존 내부라 자사몰 픽셀이 구매를 볼 수 없다'
+    - pattern: '_Traffic_'
+      reason: '트래픽 캠페인 — 구매가 목표가 아니다'
+    - pattern: '_Reach_'
+      reason: '도달 캠페인 — 구매가 목표가 아니다'
+    - pattern: '_Videoview_'
+      reason: '동영상 조회 캠페인 — 구매가 목표가 아니다'
+    - pattern: '_Engagement_'
+      reason: '참여 캠페인 — 구매가 목표가 아니다'
+    # TikTok Shop 도 자사몰 픽셀 밖에서 전환이 일어난다면 아래 주석을 푸세요.
+    # - pattern: '_TTS_'
+    #   reason: 'TikTok Shop — 자사몰 픽셀 밖에서 전환이 일어난다'
+
+  # 반대로 '이것만 판정한다' 로 좁히고 싶을 때. 비워 두면 exclude 만 적용된다.
+  #   include:
+  #     - pattern: '_SPF_'
+  include: []

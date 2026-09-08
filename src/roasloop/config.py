@@ -89,6 +89,12 @@ class Config:
         return self.account.get("account", {}).get("currency", "KRW")
 
     @property
+    def scope(self):
+        """판정 대상 범위. 설정이 없으면 전부 판정한다."""
+        from .scope import MeasurementScope
+        return MeasurementScope(self.rules.get("measurement"))
+
+    @property
     def ownership(self):
         """캠페인 소유 구분기. 설정이 없으면 전부 '미분류' = 아무것도 건드리지 않는다."""
         from .ownership import Ownership

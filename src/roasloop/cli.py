@@ -92,6 +92,29 @@ def _load_perf(path: Path) -> list[AdPerformance]:
     return [AdPerformance(**row) for row in data]
 
 
+def _scoped(run: Path, cfg: Config) -> tuple[list[AdPerformance], list[tuple]]:
+    """판정 대상만 남기고, 제외된 것은 사유와 함께 돌려준다.
+
+    harvest 는 계정 전체를 그대로 저장한다. 범위를 좁히는 것은 판정 시점의 일이라
+    설정을 바꿔도 데이터를 다시 받을 필요가 없다.
+    """
+    perfs = _load_perf(run / "perf.json")
+    return cfg.scope.split(perfs, key=lambda p: p.campaign_name)
+
+
+def _print_excluded(dropped: list[tuple], currency: str) -> None:
+    if not dropped:
+        return
+    from .scope import summarize_excluded
+
+    total = sum(p.spend for p, _ in dropped)
+    print(f"■ 판정 제외 {len(dropped)}개 · 지출 {total:,.0f} {currency}")
+    for b in summarize_excluded(dropped):
+        print(f"    {b['count']:>3}개  {b['spend']:>12,.0f}   {b['reason']}")
+    print("    (전환을 측정할 수 없는 캠페인입니다. ROAS 계산에서 뺐습니다)")
+    print()
+
+
 # --------------------------------------------------------------------- 명령들
 def cmd_plan(args, cfg: Config) -> None:
     from .matrix import expand, load_history, write_csv
@@ -221,10 +244,13 @@ def cmd_harvest(args, cfg: Config) -> None:
 
 def cmd_judge(args, cfg: Config) -> None:
     run = Path(args.run) if args.run else _latest_run()
-    perfs = _load_perf(run / "perf.json")
+    perfs, dropped = _scoped(run, cfg)
+    if not perfs:
+        sys.exit("판정 대상이 없습니다. config/rules.yaml 의 measurement 설정을 확인하세요.")
     judgements = judge_all(perfs, cfg.rules)
     own = cfg.ownership
 
+    _print_excluded(dropped, cfg.currency)
     print(rp.judgement_summary(judgements, cfg.currency))
     print()
     print(rp.ownership_summary(judgements, own, cfg.currency))
@@ -405,7 +431,8 @@ def cmd_report(args, cfg: Config) -> None:
     from . import dna as dna_mod
 
     run = Path(args.run) if args.run else _latest_run()
-    judgements = judge_all(_load_perf(run / "perf.json"), cfg.rules)
+    perfs, dropped = _scoped(run, cfg)
+    judgements = judge_all(perfs, cfg.rules)
     conf = cfg.rules.get("confidence", {})
     dna_report = None
     if not args.no_dna:
@@ -418,6 +445,7 @@ def cmd_report(args, cfg: Config) -> None:
     text = rp.markdown_report(
         judgements, dna_report, cfg.ownership,
         period=args.period or run.name, currency=cfg.currency,
+        excluded=dropped,
     )
     out = rp.write_markdown(text, Path(args.out) if args.out else run / "report.md")
     print(f"→ {out}")
@@ -433,7 +461,8 @@ def cmd_apply(args, cfg: Config) -> None:
     from .ownership import Owner
 
     run = Path(args.run) if args.run else _latest_run()
-    judgements = judge_all(_load_perf(run / "perf.json"), cfg.rules)
+    perfs, _ = _scoped(run, cfg)
+    judgements = judge_all(perfs, cfg.rules)
     own = cfg.ownership
 
     kills = [j for j in judgements if j.verdict == Verdict.KILL]
@@ -475,7 +504,9 @@ def cmd_dna(args, cfg: Config) -> None:
     from . import dna as dna_mod
 
     run = Path(args.run) if args.run else _latest_run()
-    judgements = judge_all(_load_perf(run / "perf.json"), cfg.rules)
+    perfs, dropped = _scoped(run, cfg)
+    _print_excluded(dropped, cfg.currency)
+    judgements = judge_all(perfs, cfg.rules)
     conf = cfg.rules.get("confidence", {})
     report = dna_mod.build(
         judgements,
@@ -512,7 +543,8 @@ def cmd_breed(args, cfg: Config) -> None:
     from .briefs import BriefRequest, dna_summary_from_report, generate, to_matrix_blocks
 
     run = Path(args.run) if args.run else _latest_run()
-    judgements = judge_all(_load_perf(run / "perf.json"), cfg.rules)
+    perfs, _ = _scoped(run, cfg)
+    judgements = judge_all(perfs, cfg.rules)
     conf = cfg.rules.get("confidence", {})
     report = dna_mod.build(judgements, level=float(conf.get("level", 0.80)),
                            fallback_aov=float(conf.get("fallback_aov", 0)))
