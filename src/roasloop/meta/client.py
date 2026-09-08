@@ -7,6 +7,7 @@ facebook-business SDK 대신 requests 를 쓴다. 의존성이 가볍고, 버전
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any, Iterator
 
@@ -14,7 +15,7 @@ import requests
 
 log = logging.getLogger("roasloop.meta")
 
-API_VERSION = "v23.0"
+API_VERSION = os.environ.get("META_API_VERSION", "v23.0")
 BASE_URL = f"https://graph.facebook.com/{API_VERSION}"
 
 #: 재시도해야 하는 Meta 에러 코드.
@@ -22,6 +23,10 @@ BASE_URL = f"https://graph.facebook.com/{API_VERSION}"
 #:   4, 17, 80004  요청량 제한
 #:   613       호출 한도 초과
 RETRYABLE_CODES = {1, 2, 4, 17, 341, 613, 80000, 80004}
+
+#: 재시도하면 안 되는 코드. 요청 자체가 잘못된 것이라 몇 번을 보내도 결과가 같다.
+#: Meta 는 이런 오류에도 HTTP 500 을 주는 경우가 있어서, 상태코드만 보면 헛되이 4번을 더 보낸다.
+CLIENT_ERROR_CODES = {100, 102, 190, 200, 2500, 3018}
 
 
 class MetaAPIError(RuntimeError):
@@ -39,6 +44,8 @@ class MetaAPIError(RuntimeError):
 
     @property
     def retryable(self) -> bool:
+        if self.code in CLIENT_ERROR_CODES:
+            return False
         return self.code in RETRYABLE_CODES or self.status >= 500
 
 

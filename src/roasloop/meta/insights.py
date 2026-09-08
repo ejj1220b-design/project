@@ -8,7 +8,8 @@ Meta insights 응답에서 매출·구매수를 꺼내는 부분이 은근히 �
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+import json
+from datetime import date, datetime, timedelta, timezone
 
 from ..judge import AdPerformance
 from .client import MetaClient
@@ -85,16 +86,29 @@ def fetch_days_active(client: MetaClient, ad_ids: list[str]) -> dict[str, int]:
 
     insights 의 time_range 는 조회 기간일 뿐 광고의 나이가 아니다. 어제 만든 광고도
     30일 조회에서는 days_active=30 으로 잡혀서, 게이트를 부당하게 통과해 버린다.
+
+    구현 주의: 예전에는 `?ids=a,b,c` 로 여러 개를 한 번에 조회했으나 v26.0 부터 없어졌다.
+    지금은 계정의 ads 엣지를 광고 ID 로 필터링해서 가져온다.
     """
     out: dict[str, int] = {}
-    today = datetime.utcnow().date()
+    today = datetime.now(timezone.utc).date()
+    wanted = set(ad_ids)
+
     for i in range(0, len(ad_ids), 50):
         chunk = ad_ids[i : i + 50]
-        resp = client.get("", {"ids": ",".join(chunk), "fields": "id,created_time"})
-        for ad_id, obj in resp.items():
-            created = obj.get("created_time", "")
+        params = {
+            "fields": "id,created_time",
+            "limit": 200,
+            "filtering": json.dumps(
+                [{"field": "ad.id", "operator": "IN", "value": chunk}]
+            ),
+        }
+        for obj in client.paged(client.account_path("ads"), params):
+            ad_id = obj.get("id")
+            if ad_id not in wanted:
+                continue
             try:
-                created_date = datetime.strptime(created[:10], "%Y-%m-%d").date()
+                created_date = datetime.strptime(obj.get("created_time", "")[:10], "%Y-%m-%d").date()
                 out[ad_id] = max(1, (today - created_date).days)
             except ValueError:
                 out[ad_id] = 1

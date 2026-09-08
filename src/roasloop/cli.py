@@ -199,8 +199,14 @@ def cmd_harvest(args, cfg: Config) -> None:
         campaign_filter=args.campaign,
     )
     if perfs and not args.skip_age:
-        ages = insights.fetch_days_active(client, [p.ad_id for p in perfs if p.ad_id])
-        insights.apply_true_age(perfs, ages)
+        # 광고 나이는 게이트 정확도를 높이는 보조 정보다. 여기서 실패해도 성과 수집은 살린다.
+        try:
+            ages = insights.fetch_days_active(client, [p.ad_id for p in perfs if p.ad_id])
+            insights.apply_true_age(perfs, ages)
+        except Exception as exc:                    # noqa: BLE001
+            print(f"참고: 광고 생성일 조회를 건너뜁니다 ({exc})")
+            print("      조회 기간을 그대로 가동 일수로 씁니다. 최근 만든 광고가")
+            print("      실제보다 오래 돌아간 것처럼 잡힐 수 있습니다.")
 
     out = _run_dir(args.stamp) / "perf.json"
     out.write_text(
