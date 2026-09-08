@@ -43,17 +43,36 @@ def _log(verbose: bool) -> None:
     )
 
 
+def _read_text_tolerant(path: Path) -> str:
+    """윈도우 메모장이 저장한 파일도 읽는다.
+
+    메모장은 저장 옵션에 따라 UTF-8(BOM 포함) 또는 ANSI(한국어 윈도우에서는 CP949)로
+    저장한다. utf-8 로만 읽으면 한글 주석이 들어간 ANSI 파일에서 그대로 터진다.
+    """
+    for encoding in ("utf-8-sig", "utf-8", "cp949"):
+        try:
+            return path.read_text(encoding=encoding)
+        except UnicodeDecodeError:
+            continue
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
 def _load_env() -> None:
     """.env 를 있으면 읽는다 (python-dotenv 없이)."""
     p = Path(".env")
     if not p.exists():
         return
-    for line in p.read_text(encoding="utf-8").splitlines():
+    for line in _read_text_tolerant(p).splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, _, v = line.partition("=")
-        os.environ.setdefault(k.strip(), v.strip().split("#")[0].strip())
+        value = v.split("#")[0].strip()
+        # 값을 따옴표로 감싸는 습관이 흔하다. 벗겨서 넣는다.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1].strip()
+        if value:
+            os.environ.setdefault(k.strip(), value)
 
 
 def _run_dir(stamp: str | None = None) -> Path:
