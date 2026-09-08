@@ -6,6 +6,7 @@
     roasloop launch   명세대로 Meta 에 대량 생성 (기본 dry-run · 기본 PAUSED)
     roasloop harvest  성과 수집 → data/runs/<날짜>/perf.json
     roasloop judge    ROAS 컷 판정 → 표 + CSV
+    roasloop campaigns 캠페인 목록과 소유 분류 확인
     roasloop report   대행사·상급자에게 공유할 보고서 (마크다운)
     roasloop dna      살아남은 축 분석 → 다음 라운드 축
     roasloop breed    승자 DNA → 새 카피·기획안 → matrix 블록
@@ -219,6 +220,44 @@ def cmd_judge(args, cfg: Config) -> None:
         print(f"   내 캠페인 중단 제안 {len(mine_kills)}개는 `roasloop apply --yes` 로 반영할 수 있습니다.")
 
 
+def cmd_campaigns(args, cfg: Config) -> None:
+    """계정의 캠페인 목록과 현재 소유 분류. ownership.yaml 을 채울 때 쓴다."""
+    from .meta.client import MetaClient
+    from .ownership import Owner
+
+    creds = MetaCredentials.from_env()
+    client = MetaClient(creds.access_token, creds.ad_account_id)
+    params = {"fields": "id,name,status,effective_status", "limit": 200}
+    if not args.all:
+        params["effective_status"] = '["ACTIVE","PAUSED"]'
+
+    own = cfg.ownership
+    rows = list(client.paged(client.account_path("campaigns"), params))
+    rows.sort(key=lambda c: c.get("name", ""))
+
+    groups: dict[Owner, list] = {o: [] for o in Owner}
+    for c in rows:
+        groups[own.classify(c.get("name", ""))].append(c)
+
+    for owner in (Owner.MINE, Owner.AGENCY, Owner.UNKNOWN):
+        items = groups[owner]
+        if not items:
+            continue
+        mark = "변경 가능" if owner.actionable else "건드리지 않음"
+        print(f"\n[{own.labels[owner]}] {len(items)}개 — {mark}")
+        for c in items:
+            print(f"  {c.get('effective_status', ''):<10} {c.get('name', '')}")
+            print(f"  {'':<10} id={c.get('id')}")
+
+    if groups[Owner.UNKNOWN]:
+        print(f"\n※ 미분류 {len(groups[Owner.UNKNOWN])}개는 안전을 위해 건드리지 않습니다.")
+        print("   내 캠페인이 맞다면 config/ownership.yaml 의 mine 에 이렇게 추가하세요:\n")
+        for c in groups[Owner.UNKNOWN][:5]:
+            print(f'     - name: "{c.get("name", "")}"')
+    if not groups[Owner.MINE]:
+        print("\n※ 내 캠페인으로 분류된 것이 없어 apply/launch 는 아무것도 하지 않습니다.")
+
+
 def cmd_report(args, cfg: Config) -> None:
     """대행사·상급자에게 그대로 보낼 보고서를 만든다. 계정은 건드리지 않는다."""
     from . import dna as dna_mod
@@ -412,6 +451,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=0, help="표에 출력할 행 수")
     sp.add_argument("--brief", action="store_true", help="요약과 제안만 보고 전체 표는 생략")
     sp.set_defaults(func=cmd_judge)
+
+    sp = sub.add_parser("campaigns", help="캠페인 목록과 소유 분류 확인 (읽기 전용)")
+    sp.add_argument("--all", action="store_true", help="종료된 캠페인까지 전부")
+    sp.set_defaults(func=cmd_campaigns)
 
     sp = sub.add_parser("report", help="공유용 보고서 생성 (읽기 전용)")
     sp.add_argument("--run")
