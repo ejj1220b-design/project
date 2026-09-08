@@ -5,6 +5,7 @@
     roasloop plan     조합 매트릭스 전개 → 발행 명세 CSV (+ 아직 소재가 없는 조합 목록)
     roasloop launch   명세대로 Meta 에 대량 생성 (기본 dry-run · 기본 PAUSED)
     roasloop harvest  성과 수집 → data/runs/<날짜>/perf.json
+    roasloop doctor   설정이 제대로 됐는지 점검 (막히면 이것부터)
     roasloop judge    ROAS 컷 판정 → 표 + CSV
     roasloop campaigns 캠페인 목록과 소유 분류 확인
     roasloop report   대행사·상급자에게 공유할 보고서 (마크다운)
@@ -218,6 +219,122 @@ def cmd_judge(args, cfg: Config) -> None:
     print("\n※ 이 명령은 광고 상태를 바꾸지 않습니다. 위 목록은 제안입니다.")
     if mine_kills:
         print(f"   내 캠페인 중단 제안 {len(mine_kills)}개는 `roasloop apply --yes` 로 반영할 수 있습니다.")
+
+
+def _mask(value: str, keep: int = 4) -> str:
+    """토큰을 화면에 띄울 때 쓰는 마스킹. 스크린샷으로 유출되지 않게 한다."""
+    if not value:
+        return "(비어 있음)"
+    if len(value) <= keep * 2:
+        return "*" * len(value)
+    return f"{value[:keep]}{'*' * 12}{value[-keep:]}  (길이 {len(value)})"
+
+
+def cmd_doctor(args, cfg: Config) -> None:
+    """설정이 제대로 됐는지 점검한다. 문제가 있으면 무엇을 고쳐야 하는지 알려준다."""
+    from .meta.client import MetaAPIError, MetaClient
+    from .ownership import Owner
+
+    ok = "✓"
+    bad = "✕"
+    problems: list[str] = []
+
+    print("■ 설정 파일")
+    env_path = Path(".env")
+    if env_path.exists():
+        print(f"  {ok} .env 파일 있음 — {env_path.resolve()}")
+    else:
+        print(f"  {bad} .env 파일이 없습니다 (현재 위치: {Path.cwd()})")
+        problems.append(".env 파일을 만드세요. .env.example 을 복사해서 이름을 .env 로 바꾸면 됩니다.")
+
+    print("\n■ 환경변수")
+    checks = [
+        ("META_ACCESS_TOKEN", True, "EAA"),
+        ("META_AD_ACCOUNT_ID", True, "act_"),
+        ("META_PAGE_ID", False, ""),
+        ("META_PIXEL_ID", False, ""),
+        ("ANTHROPIC_API_KEY", False, "sk-ant-"),
+    ]
+    for name, required, prefix in checks:
+        value = os.environ.get(name, "")
+        if not value:
+            mark = bad if required else "-"
+            note = " (필수)" if required else " (지금은 없어도 됩니다)"
+            print(f"  {mark} {name}: 비어 있음{note}")
+            if required:
+                problems.append(f"{name} 를 .env 에 채우세요.")
+            continue
+
+        issues = []
+        if value != value.strip():
+            issues.append("앞뒤 공백")
+        if value[:1] in {'"', "'"} or value[-1:] in {'"', "'"}:
+            issues.append("따옴표")
+        if " " in value:
+            issues.append("중간 공백")
+        if prefix and not value.startswith(prefix):
+            issues.append(f"'{prefix}' 로 시작하지 않음")
+        if name == "META_ACCESS_TOKEN" and len(value) < 100:
+            issues.append("길이가 너무 짧음 — 예시 문구가 그대로 들어있지 않은지 확인")
+
+        if issues:
+            print(f"  {bad} {name}: {_mask(value)}  ← {', '.join(issues)}")
+            problems.append(f"{name} 값을 고치세요: {', '.join(issues)}")
+        else:
+            print(f"  {ok} {name}: {_mask(value)}")
+
+    print("\n■ Meta API 연결")
+    try:
+        creds = MetaCredentials.from_env()
+        client = MetaClient(creds.access_token, creds.ad_account_id, max_retries=0)
+        me = client.get(creds.ad_account_id, {"fields": "name,account_status,currency,timezone_name"})
+        print(f"  {ok} 광고 계정 접속 성공")
+        print(f"      이름 {me.get('name')} · 통화 {me.get('currency')} · 시간대 {me.get('timezone_name')}")
+        if str(me.get("account_status")) != "1":
+            print(f"      ⚠ 계정 상태 코드 {me.get('account_status')} — 활성 상태가 아닐 수 있습니다")
+        if me.get("currency") and me["currency"] != cfg.currency:
+            print(f"      ⚠ config/account.yaml 의 통화는 {cfg.currency} 인데 계정은 {me['currency']} 입니다")
+            problems.append(f"config/account.yaml 의 currency 를 {me['currency']} 로 맞추세요.")
+    except MetaAPIError as exc:
+        print(f"  {bad} 접속 실패 — {exc}")
+        if exc.code == 190:
+            problems.append("토큰이 잘못됐거나 만료됐습니다. 그래프 API 탐색기에서 새로 발급하세요.")
+        elif exc.code in (100, 200, 10):
+            problems.append("토큰 권한이 모자랍니다. ads_read 권한을 넣어 다시 발급하세요.")
+        else:
+            problems.append("위 오류 메시지를 확인하세요.")
+    except RuntimeError as exc:
+        # 네트워크 오류의 원문은 길고 무섭게 생겼다. 핵심만 보여준다.
+        msg = str(exc)
+        if "연결 실패" in msg or "Max retries" in msg:
+            print(f"  {bad} 서버에 연결하지 못했습니다 (인터넷 연결 / 사내 방화벽 확인)")
+            problems.append("graph.facebook.com 에 연결되지 않습니다. 네트워크를 확인하세요.")
+        else:
+            print(f"  {bad} {msg.splitlines()[0]}")
+            problems.append(msg.splitlines()[0])
+
+    print("\n■ 캠페인 소유 설정")
+    own = cfg.ownership
+    if not cfg.ownership_config:
+        print(f"  {bad} config/ownership.yaml 이 없습니다")
+        problems.append("config/ownership.yaml 이 있어야 합니다.")
+    else:
+        mine_rules = len(cfg.ownership_config.get("mine") or [])
+        agency_rules = len(cfg.ownership_config.get("agency") or [])
+        print(f"  {ok if agency_rules else '-'} 대행사 규칙 {agency_rules}개")
+        if mine_rules:
+            print(f"  {ok} 내 캠페인 규칙 {mine_rules}개 — apply/launch 사용 가능")
+        else:
+            print("  - 내 캠페인 규칙 0개 — apply/launch 는 아무것도 건드리지 않습니다")
+            print("    (판정과 보고서는 정상 동작합니다. `roasloop campaigns` 로 이름을 확인해 채우세요)")
+
+    print()
+    if problems:
+        print(f"■ 고칠 것 {len(problems)}개")
+        for i, msg in enumerate(problems, 1):
+            print(f"  {i}. {msg}")
+    else:
+        print("■ 이상 없습니다. `roasloop campaigns` 로 넘어가세요.")
 
 
 def cmd_campaigns(args, cfg: Config) -> None:
@@ -451,6 +568,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=0, help="표에 출력할 행 수")
     sp.add_argument("--brief", action="store_true", help="요약과 제안만 보고 전체 표는 생략")
     sp.set_defaults(func=cmd_judge)
+
+    sp = sub.add_parser("doctor", help="설정 점검 — 뭐가 잘못됐는지 알려준다 (읽기 전용)")
+    sp.set_defaults(func=cmd_doctor)
 
     sp = sub.add_parser("campaigns", help="캠페인 목록과 소유 분류 확인 (읽기 전용)")
     sp.add_argument("--all", action="store_true", help="종료된 캠페인까지 전부")
