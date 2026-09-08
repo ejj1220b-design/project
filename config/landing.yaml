@@ -1,0 +1,28 @@
+# 랜딩ID ↔ 실제 URL
+# 출처: "리터니티_광고네이밍_규칙_및_생성기" 시트 [코드마스터] 랜딩 마스터
+landings:
+  AMZ.YulmuMask.Detail:      https://www.amazon.com/dp/B0F74NZX1M
+  AMZ.YulmuAmpoule.Detail:   https://www.amazon.com/dp/B0G3VY7P81
+  AMZ.EarTherapy.Detail:     https://www.amazon.com/dp/B0FWCMXRL7
+  SPF.MainPage:              https://returnity.global/
+  SPF.YulmuMask.Detail:      https://returnity.global/products/yulmu-skinclean-mask
+  SPF.Mothersday.PDP:        https://returnity.global/collections/best-sellers-new/products/40-mothers-day-full-package
+  SPF.Yulmuroutine.PDP:      https://returnity.global/collections/best-sellers-new/products/minshua-pick-yulmu-routine
+  SPF.SHroutine.PDP:         https://returnity.global/collections/best-sellers-new/products/minshua-pick-skin-healer-routine
+  SPF.YulmuMask.PDP:         https://returnity.global/products/yulmu-skinclean-mask
+  SPF.YulmuAmpoule.PDP:      https://returnity.global/products/yulmu-ampoule
+  SPF.EarTherapy.PDP:        https://returnity.global/products/ear-therapy-acupressure-patch
+  SPF.Bubblebooster.PDP:     https://returnity.global/products/yulmu-bubble-booster
+  SPF.YulmuGelmask.PDP:      https://returnity.global/products/returnity-yulmu-pdrn-glowy-skin-gel-mask
+  SPF.Yulmu97Toner.PDP:      https://returnity.global/products/yulmu-toner
+  SPF.SHcleansingfoam.PDP:   https://returnity.global/products/skin-healer-deep-cleansing-foam
+  SPF.SHwatertoner.PDP:      https://returnity.global/products/skin-healer-toner
+  SPF.SHampoulegel.PDP:      https://returnity.global/products/skinhealer-capsule-ampoule-gel
+  SPF.Plasmadevice.PDP:      https://returnity.global/products/plasma-device
+  SPF.BBRpack.PDP:           https://returnity.global/products/baekbokryeong-rice-brightening-mask
+  SPF.YulmuBBR.PDP:          https://returnity.global/products/baekbokryeong-yulmu-pack-combo
+  SPF.ScalpSwab.PDP:         https://returnity.global/products/yulmu-deep-scaling-scalp-swab
+
+# ⚠ Shopify canonical 경로 주의
+#   /collections/... 를 거친 주소는 정식 주소가 아니다. GA4 페이지 리포트에서 같은 제품이 두 갈래로 쌓인다.
+#   위 SPF 항목은 전부 /products/{handle} 형태로 정규화해 두었다.

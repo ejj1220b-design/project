@@ -1,0 +1,36 @@
+# 리터니티 광고 네이밍 코드마스터
+# 출처: "리터니티_광고네이밍_규칙_및_생성기" 시트 [코드마스터]
+# 값을 늘릴 때는 반드시 여기에 먼저 추가한다. 임의 표기를 쓰면 리포팅 축이 갈라진다.
+
+country:        [US, CA, JP, UK, DE, AU, EU, NA]
+source:         [Meta, Google, Tiktok, TiktokShopAds, Amazon, DSP]
+medium:         [DA, SA, Pmax, DG, YT]
+sales_channel:  [SPF, AMZ, TTS, All]
+language:       [EN, KR]
+product_line:   [Yulmu, SkinHealer, EarTherapy, Guasha, Tea, All]
+objective:      [Conversion, Traffic, Leads, Reach, Engagement, Videoview, ASC, AppPromotion, None]
+ad_product:     [ASC, bau, Catalog, Reels, Beauty]
+
+target:         [Demo, Interest, Re, Hashtag, Contextual, IMLS, Retention, Auto, Lal, Broad]
+target_detail:  [All, 180d, 90d, Page180, IG365, Skincare, Broad, Purchaser, ATC]
+gender_age:     [All, F2534, F2554, F3544, F3554, F3565, F4554, F5565, F65plus, M2534]
+opt_event:      [Purchase, ATC, ROAS, LPV, Click, APD, Third, Amazon, All]
+
+promo:          [26Regular, 26Launching, BF, CYBER, XMAS, NEWYEAR, SUMMER, PRIME, BOGO, GWP, FS]
+product:
+  - YulmuMask
+  - YulmuAmpoule
+  - YulmuToner
+  - YulmuGelmask
+  - YulmuBubbleBooster
+  - YulmuScalpSwab
+  - EarTherapy
+  - Guasha
+  - BBRpack
+  - SHwatertoner
+  - SHcleansingfoam
+  - SHampoulegel
+  - PlasmaDevice
+  - Bundle
+  - Brand
+creative_type:  [Video, Image, GIF, MPA, REC, BCA, Carousel]

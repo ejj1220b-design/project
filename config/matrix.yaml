@@ -1,0 +1,68 @@
+# 라운드 정의 — 이 파일 하나가 "이번에 무엇을 몇 개 찍어낼지" 를 결정한다.
+round: R1
+
+# 캠페인 슬롯. account.yaml 의 defaults 를 덮어쓴다.
+defaults:
+  country: US
+  language: EN
+  product_line: Yulmu
+  objective: Conversion
+  ad_product: bau
+campaign_note: American
+
+# 조합 축. 리스트를 곱한 수만큼 광고가 만들어진다.
+#   아래 예시: 카피 4 × 오브제 3 × 유형 2 = 24개 × 광고셋 2개 = 48개
+creatives:
+  promo: 26Regular
+  product: YulmuMask
+  landing_id: SPF.YulmuMask.PDP
+  creative_type: [Video, Image]
+  copy: [사우나필수템, 30대부터율무, 모공고민끝, 세안후당김없음]
+  object: [공병템, 손등테스트, 욕실선반]
+
+# 광고셋. 이름은 규칙에 따라 자동 생성된다.
+adsets:
+  - {target: Demo,     target_detail: Broad,     gender_age: F2554, opt_event: Purchase, note: American}
+  - {target: Re,       target_detail: 180d,      gender_age: F2554, opt_event: Purchase, note: American}
+
+# 광고셋 실제 세팅 (launch 가 참조). key 는 생성된 광고셋명.
+adset_settings:
+  - name: "Demo.Broad_F2554_Purchase^American"
+    daily_budget: 30000            # 계정 통화 최소 단위 (KRW=원)
+    optimization_goal: OFFSITE_CONVERSIONS
+    billing_event: IMPRESSIONS
+    custom_event_type: PURCHASE
+    targeting:
+      geo_locations: {countries: [US]}
+      age_min: 25
+      age_max: 54
+      genders: [2]
+  - name: "Re.180d_F2554_Purchase^American"
+    daily_budget: 20000
+    optimization_goal: OFFSITE_CONVERSIONS
+    billing_event: IMPRESSIONS
+    custom_event_type: PURCHASE
+    targeting:
+      geo_locations: {countries: [US]}
+      age_min: 25
+      age_max: 54
+      genders: [2]
+      custom_audiences: []          # 180일 방문자 오디언스 ID 를 넣으세요
+
+# 소재 바인딩. key 는 "카피|오브제|유형".
+#   여기에 없는 조합은 '제작 대기' 로 분류되고 launch 에서 제외된다.
+#   image_hash 는 Meta 이미지 업로드 후 나오는 해시, video_id 는 업로드된 영상 ID.
+assets:
+  "사우나필수템|공병템|Video":
+    video_id: "1234567890"
+    thumbnail_url: "https://cdn.example.com/thumb1.jpg"
+  "사우나필수템|공병템|Image":
+    image_hash: "abc123def456"
+
+# 카피 뱅크. key 는 카피 코드. `roasloop breed` 결과를 여기에 붙여 넣는다.
+copy:
+  사우나필수템:
+    primary_text: "The Korean sauna staple that finally made sense for my pores."
+    headline: "Yulmu Skinclean Mask"
+    description: "Wash-off, no tightness"
+    call_to_action: SHOP_NOW

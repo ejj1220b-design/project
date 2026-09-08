@@ -1,0 +1,32 @@
+# ROAS 컷 규칙
+# "얼마나 써봤을 때, 어느 선 밑이면 끈다" 를 정의한다.
+# 핵심은 노이즈로 죽이지 않는 것. 구매 수가 적을수록 ROAS 는 심하게 흔들린다.
+
+targets:
+  target_roas: 2.0        # 이 밑이라고 판단되면 KILL (자사몰 목표선 하단)
+  scale_roas:  2.5        # 이 위라고 판단되면 SCALE (목표선 상단)
+
+gates:
+  # 아래 셋을 다 넘기기 전에는 판정하지 않는다 (INSUFFICIENT = 계속 돌린다).
+  min_spend: 60000        # 계정 통화 기준. 권장값 = 목표 CPA × 1.5 ~ 2
+  min_impressions: 3000
+  min_days: 3
+
+early_kill:
+  # 게이트를 다 못 넘겨도, 이만큼 쓰고 구매가 0이면 끊는다.
+  enabled: true
+  spend_no_purchase: 120000   # 권장값 = 목표 CPA × 3
+  # 참고: 26년 6~7월 자사몰 CPA 98,247 ~ 113,305원
+
+confidence:
+  # 구매 수를 포아송으로 보고 ROAS 신뢰구간을 만든다. (객단가는 관측값 고정)
+  #   KILL  = ROAS 신뢰구간 상단 < target_roas  → "목표보다 낮은 게 거의 확실"
+  #   SCALE = ROAS 신뢰구간 하단 >= scale_roas  → "목표보다 높은 게 거의 확실"
+  level: 0.80             # 0.80 = 양측 10%씩. 소재 테스트에는 0.95보다 0.80이 실용적이다.
+  # 구매 0건일 때 상단을 계산하려면 객단가 가정이 필요하다.
+  fallback_aov: 55000     # 계정 평균 객단가. insights 에서 자동 추정되면 그 값이 우선한다.
+
+guards:
+  # 부가 경고. 판정을 바꾸지는 않고 리포트에 사유로 남는다.
+  max_frequency: 3.0
+  min_ctr: 0.008
