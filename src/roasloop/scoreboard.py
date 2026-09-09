@@ -103,17 +103,37 @@ class Scoreboard:
         ]
 
     def verdict(self) -> tuple[bool, bool, list[str]]:
-        """(물량에서 이기는가, 효율에서 이기는가, 코멘트)"""
+        """(물량에서 이기는가, 효율에서 이기는가, 코멘트)
+
+        물량 기준은 신규 소재 수다. 총 광고 수는 과거에 쌓인 것까지 세므로
+        '이번 기간에 얼마나 찍어냈는가' 를 반영하지 못한다. 다만 광고명을 못 읽어
+        신규 소재를 셀 수 없을 때는 광고 수로 대신한다.
+        """
         m, a = self.mine, self.agency
-        vol = m.new_creatives >= a.new_creatives
-        eff = m.roas >= a.roas
+        # 신규 소재를 셀 수 없으면(광고명 파싱 실패, 기간 정보 없음) 광고 수로 대신 판단한다.
+        # 둘 다 0 인 것을 '동률' 로 읽으면 지고 있는데 이긴다고 나온다.
+        if m.new_creatives or a.new_creatives:
+            vol = m.new_creatives > a.new_creatives
+            vol_basis = "신규 소재"
+        else:
+            vol = m.ads > a.ads
+            vol_basis = "광고 수"
+        eff = m.roas > a.roas
         notes: list[str] = []
+        if not (m.new_creatives or a.new_creatives):
+            notes.append(
+                "신규 소재 수를 세지 못했습니다 (광고명이 네이밍 규칙과 맞지 않거나 "
+                "조회 기간 정보가 없습니다). 물량은 광고 수로만 비교했습니다. "
+                "`roasloop names` 로 확인하세요."
+            )
 
         if eff and vol:
             notes.append("물량과 효율 둘 다 앞서 있습니다. 지출을 늘려 격차를 벌릴 구간입니다.")
         elif eff and not vol:
+            gap = (f"신규 소재 {m.new_creatives} vs {a.new_creatives}" if vol_basis == "신규 소재"
+                   else f"광고 {m.ads}개 vs {a.ads}개")
             notes.append(
-                f"효율은 앞서는데 물량이 부족합니다 (신규 소재 {m.new_creatives} vs {a.new_creatives}). "
+                f"효율은 앞서는데 물량이 부족합니다 ({gap}). "
                 "지금 효율을 유지한 채 발행량을 올리는 것이 가장 확실한 수입니다."
             )
         elif vol and not eff:

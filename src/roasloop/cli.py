@@ -9,6 +9,7 @@
     roasloop judge    ROAS 컷 판정 → 표 + CSV
     roasloop campaigns 캠페인 목록과 소유 분류 확인
     roasloop report   대행사·상급자에게 공유할 보고서 (마크다운)
+    roasloop names    광고명이 네이밍 규칙과 맞는지 진단
     roasloop scoreboard 인하우스 vs 대행사 (물량 · 효율 · 학습)
     roasloop dna      살아남은 축 분석 → 다음 라운드 축
                       --by-owner 를 붙이면 대행사가 검증한 승자를 찾아낸다
@@ -486,6 +487,69 @@ def cmd_campaigns(args, cfg: Config) -> None:
         print("\n※ 내 캠페인으로 분류된 것이 없어 apply/launch 는 아무것도 하지 않습니다.")
 
 
+def cmd_names(args, cfg: Config) -> None:
+    """광고명이 네이밍 규칙과 맞는지 진단한다.
+
+    DNA 분석과 신규 소재 집계는 광고명 역파싱에 전적으로 의존한다. 계정의 실제
+    광고명이 규칙과 다르면 그 기능이 통째로 비는데, 화면에는 '0개' 로만 나와서
+    무엇이 문제인지 알기 어렵다. 그래서 실제 형태를 직접 보여준다.
+    """
+    from collections import Counter, defaultdict
+
+    from .naming import AD_SLOTS, AdName, NamingError
+
+    run = Path(args.run) if args.run else _latest_run()
+    perfs = _load_perf(run / "perf.json")
+    if not perfs:
+        sys.exit("성과 데이터가 비어 있습니다.")
+
+    ok_names, bad_names = [], []
+    for p_ in perfs:
+        try:
+            AdName.parse(p_.ad_name)
+            ok_names.append(p_.ad_name)
+        except NamingError:
+            bad_names.append(p_.ad_name)
+
+    total = len(perfs)
+    print(f"■ 광고명 {total}개 중 규칙에 맞는 것 {len(ok_names)}개 ({len(ok_names) / total:.0%})\n")
+
+    if not bad_names:
+        print("모두 규칙에 맞습니다. DNA 분석이 정상 동작합니다.")
+        return
+
+    print(f"규칙 기준: 광고명은 '_' 로 구분된 {len(AD_SLOTS)}칸이어야 합니다.")
+    print("  " + "_".join(f"{{{sl}}}" for sl in AD_SLOTS))
+    print("  예) 26Regular_YulmuMask_Video_사우나필수템_공병템_SPF.YulmuMask.PDP_260730\n")
+
+    # 칸 수별로 묶어서 보여준다 — 몇 칸짜리가 주류인지가 규칙 조정의 출발점이다
+    by_slots: dict[int, list[str]] = defaultdict(list)
+    for name in bad_names:
+        by_slots[len(name.split("^")[0].split("_"))].append(name)
+
+    print(f"■ 규칙을 벗어난 {len(bad_names)}개 — 칸 수별 분포")
+    for slots in sorted(by_slots, key=lambda k: -len(by_slots[k])):
+        names = by_slots[slots]
+        print(f"\n  [{slots}칸] {len(names)}개"
+              f"{'  ← 규칙은 ' + str(len(AD_SLOTS)) + '칸' if slots != len(AD_SLOTS) else ''}")
+        for name in names[: args.samples]:
+            print(f"    {name}")
+
+    # 구분자 실태
+    seps = Counter()
+    for name in bad_names:
+        for ch in ("_", "-", "|", ".", " ", "^"):
+            if ch in name:
+                seps[ch] += 1
+    print("\n■ 광고명에 쓰인 구분자")
+    for ch, cnt in seps.most_common():
+        shown = "공백" if ch == " " else ch
+        print(f"    {shown}   {cnt}개 광고 ({cnt / len(bad_names):.0%})")
+
+    print("\n※ 이 결과를 그대로 공유해 주시면 규칙을 실제 광고명에 맞게 조정할 수 있습니다.")
+    print("   광고명 자체는 바꾸지 않아도 됩니다 — 읽는 쪽을 맞추면 됩니다.")
+
+
 def cmd_scoreboard(args, cfg: Config) -> None:
     """인하우스 vs 대행사. 물량과 효율을 같은 화면에서 본다."""
     from . import scoreboard as sb
@@ -773,6 +837,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("campaigns", help="캠페인 목록과 소유 분류 확인 (읽기 전용)")
     sp.add_argument("--all", action="store_true", help="종료된 캠페인까지 전부")
     sp.set_defaults(func=cmd_campaigns)
+
+    sp = sub.add_parser("names", help="광고명이 네이밍 규칙과 맞는지 진단 (읽기 전용)")
+    sp.add_argument("--run")
+    sp.add_argument("--samples", type=int, default=5, help="칸 수별로 보여줄 예시 개수")
+    sp.set_defaults(func=cmd_names)
 
     sp = sub.add_parser("scoreboard", help="인하우스 vs 대행사 비교 (읽기 전용)")
     sp.add_argument("--run")
