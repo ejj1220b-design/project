@@ -88,9 +88,27 @@ def _run_dir(stamp: str | None = None) -> Path:
 
 
 def _latest_run() -> Path:
-    if not RUNS.exists() or not any(RUNS.iterdir()):
+    """가장 최근에 수집한 런.
+
+    이름순으로 고르면 안 된다. --stamp 로 이름을 붙인 폴더(month, recent...)는
+    숫자 날짜보다 뒤로 정렬되어, 새로 받은 데이터를 두고 옛 폴더를 계속 보게 된다.
+    실제 수집 시각(perf.json 의 수정 시각)으로 고른다.
+    """
+    if not RUNS.exists():
         sys.exit("성과 데이터가 없습니다. 먼저 `roasloop harvest` 를 실행하세요.")
-    return sorted(RUNS.iterdir())[-1]
+    runs = [d for d in RUNS.iterdir() if d.is_dir() and (d / "perf.json").exists()]
+    if not runs:
+        sys.exit("성과 데이터가 없습니다. 먼저 `roasloop harvest` 를 실행하세요.")
+    return max(runs, key=lambda d: (d / "perf.json").stat().st_mtime)
+
+
+def _describe_run(run: Path) -> str:
+    """지금 어떤 데이터를 보고 있는지 한 줄. 기간이 헷갈리는 사고를 막는다."""
+    window = _window(run)
+    if window:
+        span = (window[1] - window[0]).days + 1
+        return f"{window[0]} ~ {window[1]} ({span}일치) · {run.name}"
+    return f"기간 정보 없음 · {run.name}"
 
 
 def _load_perf(path: Path) -> list[AdPerformance]:
@@ -288,6 +306,7 @@ def cmd_harvest(args, cfg: Config) -> None:
 
 def cmd_judge(args, cfg: Config) -> None:
     run = Path(args.run) if args.run else _latest_run()
+    print(f"데이터: {_describe_run(run)}\n")
     perfs, dropped = _scoped(run, cfg)
     if not perfs:
         sys.exit("판정 대상이 없습니다. config/rules.yaml 의 measurement 설정을 확인하세요.")
@@ -525,7 +544,7 @@ def cmd_guide(args, cfg: Config) -> None:
     from . import guide
 
     dispatch = {
-        "harvest": lambda: cmd_harvest(_defaults("harvest"), cfg),
+        "harvest": lambda: cmd_harvest(_defaults("harvest", days=_ask_days()), cfg),
         "scoreboard": lambda: cmd_scoreboard(_defaults("scoreboard", brief=True), cfg),
         "dna": lambda: cmd_dna(_defaults("dna", by_owner=True, brief=True), cfg),
         "judge": lambda: cmd_judge(_defaults("judge", brief=True), cfg),
@@ -580,6 +599,26 @@ def cmd_guide(args, cfg: Config) -> None:
             print(f"\n다음으로 [{nxt_key}] {nxt_label} 를 해보세요.")
         else:
             print("\n한 바퀴 다 돌았습니다. [q] 로 나가시면 됩니다.")
+
+
+def _ask_days(default: int = 14) -> int:
+    """안내 모드에서 기간을 묻는다. 매번 옵션을 기억하지 않아도 되게."""
+    print("\n  며칠치를 볼까요?")
+    print("    14  최근 흐름 · 대행사와 비교하기에 적당")
+    print("    30  판정과 소재 분석 · 표본이 두 배가 됩니다")
+    print("    60  오래 꾸준한 소재를 볼 때")
+    try:
+        raw = input(f"  숫자를 입력하세요 (엔터 = {default}): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return default
+    if not raw:
+        return default
+    try:
+        days = int(raw)
+    except ValueError:
+        print(f"  숫자가 아니라서 {default}일로 진행합니다.")
+        return default
+    return max(1, min(days, 365))
 
 
 def _defaults(command: str, **overrides):
@@ -679,6 +718,7 @@ def _load_steady(run: Path, cfg: Config):
 def cmd_steady(args, cfg: Config) -> None:
     """꾸준히 오래 구매를 일으킨 소재."""
     run = Path(args.run) if args.run else _latest_run()
+    print(f"데이터: {_describe_run(run)}\n")
     report = _load_steady(run, cfg)
     if report is None:
         sys.exit(
@@ -858,6 +898,7 @@ def cmd_dna(args, cfg: Config) -> None:
     from . import dna as dna_mod
 
     run = Path(args.run) if args.run else _latest_run()
+    print(f"데이터: {_describe_run(run)}\n")
     perfs, dropped = _scoped(run, cfg)
     _print_excluded(dropped, cfg.currency)
     judgements = judge_all(perfs, cfg.rules)

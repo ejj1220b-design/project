@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from datetime import datetime
@@ -27,6 +28,7 @@ class State:
     has_judgement: bool
     has_report: bool
     unreadable_names: int
+    window: tuple[str, str] | None = None
 
     @property
     def has_data(self) -> bool:
@@ -38,13 +40,13 @@ class State:
 
 
 def diagnose(cfg) -> State:
-    import json
-
-    runs = sorted(RUNS.iterdir()) if RUNS.exists() else []
-    latest = runs[-1] if runs else None
+    runs = [d for d in RUNS.iterdir() if d.is_dir() and (d / "perf.json").exists()] if RUNS.exists() else []
+    # 이름순이 아니라 수집 시각으로 고른다. --stamp 로 붙인 이름은 날짜보다 뒤로 정렬된다.
+    latest = max(runs, key=lambda d: (d / "perf.json").stat().st_mtime) if runs else None
     ads = 0
     unreadable = 0
     age = None
+    window = None
 
     if latest and (latest / "perf.json").exists():
         try:
@@ -62,6 +64,13 @@ def diagnose(cfg) -> State:
             ads = 0
         mtime = datetime.fromtimestamp((latest / "perf.json").stat().st_mtime)
         age = (datetime.now() - mtime).days
+        wp = latest / "window.json"
+        if wp.exists():
+            try:
+                w = json.loads(wp.read_text(encoding="utf-8"))
+                window = (w["since"], w["until"])
+            except (ValueError, KeyError):
+                window = None
 
     return State(
         has_token=bool(os.environ.get("META_ACCESS_TOKEN")),
@@ -71,6 +80,7 @@ def diagnose(cfg) -> State:
         has_judgement=bool(latest and (latest / "judgement.csv").exists()),
         has_report=bool(latest and (latest / "report.html").exists()),
         unreadable_names=unreadable,
+        window=window,
     )
 
 
@@ -82,7 +92,14 @@ def headline(state: State) -> list[str]:
         return ["아직 성과 데이터가 없습니다."]
 
     when = "오늘" if state.age_days == 0 else f"{state.age_days}일 전"
-    lines = [f"광고 {state.ads}개 · {when} 수집"]
+    if state.window:
+        from datetime import date as _d
+
+        span = (_d.fromisoformat(state.window[1]) - _d.fromisoformat(state.window[0])).days + 1
+        period = f"{state.window[0]} ~ {state.window[1]} ({span}일치)"
+    else:
+        period = "기간 정보 없음"
+    lines = [f"광고 {state.ads}개 · {period}", f"{when} 수집 · {state.latest_run.name}"]
     if state.unreadable_names:
         lines.append(
             f"⚠ 광고명 {state.unreadable_names}개를 못 읽습니다 — 소재 분석이 그만큼 빕니다"
@@ -130,7 +147,7 @@ def actions_for(state: State, last: str | None = None) -> tuple[list[Action], in
         ], 0
 
     items = [
-        Action("1", "성과 가져오기", "최근 14일 · 계정을 읽기만 합니다", "harvest"),
+        Action("1", "성과 가져오기", "기간을 물어봅니다 · 계정을 읽기만 합니다", "harvest"),
         Action("2", "대행사와 비교하기", "물량 · 효율 · 학습", "scoreboard"),
         Action("3", "뭐가 이겼는지 보기", "대행사가 검증한 승자도 함께", "dna"),
         Action("4", "오래 꾸준한 소재", "매일 구매가 나는 소재", "steady"),

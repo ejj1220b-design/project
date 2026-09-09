@@ -120,3 +120,45 @@ def test_my_edge_finds_what_agency_does_not_have(rules):
     ]
     split = dna.compare_owners(judge_all(rows, rules), OWN, min_ads=2)
     assert "내독점" in [s.value for s in split.my_edge if s.axis == "copy"]
+
+
+# ------------------------------------------------- 어느 런을 읽는가
+def test_latest_run_uses_collection_time_not_name(tmp_path, monkeypatch):
+    """이름순으로 고르면 --stamp 로 붙인 이름(month)이 날짜(20260910)보다 뒤로 정렬되어,
+    새로 받은 데이터를 두고 옛 폴더를 계속 보게 된다. 실제로 났던 사고다."""
+    import json
+    import os
+    import time
+
+    from roasloop import cli
+
+    runs = tmp_path / "runs"
+    old = runs / "month"
+    new = runs / "20260910"
+    for d in (old, new):
+        d.mkdir(parents=True)
+        (d / "perf.json").write_text(json.dumps([]), encoding="utf-8")
+
+    # 이름순으로는 month 가 뒤, 실제로는 20260910 이 나중에 수집됨
+    assert sorted(p.name for p in runs.iterdir())[-1] == "month"
+    now = time.time()
+    os.utime(old / "perf.json", (now - 3600, now - 3600))
+    os.utime(new / "perf.json", (now, now))
+
+    monkeypatch.setattr(cli, "RUNS", runs)
+    assert cli._latest_run().name == "20260910"
+
+
+def test_latest_run_ignores_directories_without_data(tmp_path, monkeypatch):
+    import json
+
+    from roasloop import cli
+
+    runs = tmp_path / "runs"
+    (runs / "empty").mkdir(parents=True)
+    real = runs / "20260901"
+    real.mkdir()
+    (real / "perf.json").write_text(json.dumps([]), encoding="utf-8")
+
+    monkeypatch.setattr(cli, "RUNS", runs)
+    assert cli._latest_run().name == "20260901"
