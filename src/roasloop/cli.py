@@ -2,6 +2,8 @@
 
 루프 한 바퀴:
 
+    roasloop          그냥 이렇게만 쳐도 됩니다. 지금 할 일을 골라 줍니다.
+
     roasloop plan     조합 매트릭스 전개 → 발행 명세 CSV (+ 아직 소재가 없는 조합 목록)
     roasloop launch   명세대로 Meta 에 대량 생성 (기본 dry-run · 기본 PAUSED)
     roasloop harvest  성과 수집 → data/runs/<날짜>/perf.json
@@ -487,6 +489,79 @@ def cmd_campaigns(args, cfg: Config) -> None:
         print("\n※ 내 캠페인으로 분류된 것이 없어 apply/launch 는 아무것도 하지 않습니다.")
 
 
+def cmd_guide(args, cfg: Config) -> None:
+    """`roasloop` 만 쳤을 때. 다음에 할 일을 골라 준다."""
+    from . import guide
+
+    dispatch = {
+        "harvest": lambda: cmd_harvest(_defaults("harvest"), cfg),
+        "scoreboard": lambda: cmd_scoreboard(_defaults("scoreboard", brief=True), cfg),
+        "dna": lambda: cmd_dna(_defaults("dna", by_owner=True, brief=True), cfg),
+        "judge": lambda: cmd_judge(_defaults("judge", brief=True), cfg),
+        "report": lambda: cmd_report(_defaults("report"), cfg),
+        "names": lambda: cmd_names(_defaults("names"), cfg),
+        "doctor": lambda: cmd_doctor(_defaults("doctor"), cfg),
+    }
+
+    last: str | None = None
+    while True:
+        state = guide.diagnose(cfg)
+        items, recommended = guide.actions_for(state, last)
+
+        print("\n" + "─" * 54)
+        for line in guide.headline(state):
+            print(f"  {line}")
+        print("─" * 54)
+        for idx, action in enumerate(items):
+            mark = "▸" if idx == recommended else " "
+            star = "   ← 추천" if idx == recommended else ""
+            print(f" {mark} [{action.key}] {action.label:<18} {action.hint}{star}")
+        print(f"   [q] 나가기")
+
+        try:
+            raw = input("\n번호를 누르고 엔터 (그냥 엔터 = 추천): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if raw in {"q", "quit", "exit", "나가기"}:
+            return
+
+        chosen = items[recommended] if not raw else next((a for a in items if a.key == raw), None)
+        if chosen is None:
+            print(f"  '{raw}' 는 없는 번호입니다.")
+            continue
+
+        print("\n" + "═" * 54)
+        try:
+            dispatch[chosen.command]()
+        except SystemExit as exc:
+            print(f"  {exc}")
+        except (RuntimeError, FileNotFoundError, ValueError) as exc:
+            print(f"  오류: {exc}")
+            if "expired" in str(exc).lower():
+                print("  → [7] 설정 점검 을 골라 무엇을 고쳐야 하는지 확인하세요.")
+        print("═" * 54)
+
+        last = chosen.command
+        nxt_key, nxt_label = guide.NEXT_HINT.get(chosen.command, (None, None))
+        if nxt_key:
+            print(f"\n다음으로 [{nxt_key}] {nxt_label} 를 해보세요.")
+        else:
+            print("\n한 바퀴 다 돌았습니다. [q] 로 나가시면 됩니다.")
+
+
+def _defaults(command: str, **overrides):
+    """안내 모드에서 각 명령을 기본 옵션으로 실행하기 위한 인자 묶음."""
+    base = dict(
+        run=None, stamp=None, period=None, limit=0, brief=False, top=5, keep_top=2,
+        min_ads=2, by_owner=False, samples=3, out=None, no_dna=False, show=False,
+        days=14, since=None, until=None, campaign=None, skip_age=True, all=False,
+        verbose=False,
+    )
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
 def cmd_names(args, cfg: Config) -> None:
     """광고명을 어떤 형식으로 읽고 있는지, 못 읽는 것은 무엇인지 보여준다.
 
@@ -563,8 +638,15 @@ def cmd_scoreboard(args, cfg: Config) -> None:
     period = args.period or (f"{window[0]} ~ {window[1]}" if window else run.name)
 
     board = sb.build(judgements, cfg.ownership, window=window, period=period, parser=cfg.parser)
-    _print_excluded(dropped, cfg.currency)
 
+    if getattr(args, "brief", False):
+        print(f"■ 대행사와 비교 · {period}\n")
+        for line in sb.brief(board):
+            print(f"  {line}" if line else "")
+        print("\n  (전체 표를 보려면: roasloop scoreboard)")
+        return
+
+    _print_excluded(dropped, cfg.currency)
     print(f"■ 스코어보드 · {period}\n")
     m, a = board.mine, board.agency
     print(f"{'':<18}{m.label:>14}{a.label:>14}{'차이':>12}")
@@ -700,17 +782,28 @@ def cmd_dna(args, cfg: Config) -> None:
         )
         labels = {"copy": "카피 앵글", "object": "오브제", "creative_type": "소재유형",
                   "product": "상품", "promo": "프로모션"}
-        print(f"[인하우스] 기준선 ROAS {split.mine.baseline_roas:.2f}")
-        print(rp.dna_table(split.mine, top=args.top, min_ads=args.min_ads))
-        print(f"\n[대행사] 기준선 ROAS {split.agency.baseline_roas:.2f}")
-        print(rp.dna_table(split.agency, top=args.top, min_ads=args.min_ads))
-
-        print("\n" + "═" * 62)
+        if not getattr(args, "brief", False):
+            print(f"[인하우스] 기준선 ROAS {split.mine.baseline_roas:.2f}")
+            print(rp.dna_table(split.mine, top=args.top, min_ads=args.min_ads))
+            print(f"\n[대행사] 기준선 ROAS {split.agency.baseline_roas:.2f}")
+            print(rp.dna_table(split.agency, top=args.top, min_ads=args.min_ads))
+            print("\n" + "═" * 62)
+        else:
+            mine_top = split.mine.top("copy", n=3, min_ads=args.min_ads)
+            if mine_top:
+                print("■ 내 카피 앵글 중 성적이 좋은 것")
+                for lv in mine_top:
+                    print(f"    {lv.value:<18} 소재 {lv.ads}개 · ROAS {lv.roas:.2f} "
+                          f"(구간 {lv.interval.lower:.2f}~{lv.interval.upper:.2f})")
+            else:
+                print("■ 내 앵글 중 결론이 난 것이 없습니다.")
+                print("    앵글당 소재가 2개 미만이면 판단이 서지 않습니다.")
+            print()
         if split.steals:
             print(f"■ 대행사가 검증했는데 내가 아직 안 쓴 축 {len(split.steals)}개")
             print(f"  내 기준선 ROAS {split.mine.baseline_roas:.2f} 보다 확실히 나은 것만 골랐습니다.")
             print("  대행사가 쓴 돈은 이미 나갔습니다. 학습만 가져오세요.\n")
-            for st in split.steals[:12]:
+            for st in split.steals[: 5 if getattr(args, "brief", False) else 12]:
                 flag = "  ⚠교란" if st.confounded else ""
                 print(f"  {labels.get(st.axis, st.axis)}  {st.value}")
                 print(f"      대행사 광고 {st.their_ads}개 · 지출 {st.their_spend:,.0f} · "
@@ -719,7 +812,7 @@ def cmd_dna(args, cfg: Config) -> None:
             print("■ 대행사에서 가져올 만한 검증된 축이 없습니다.")
         if split.my_edge:
             print(f"\n■ 내가 검증했고 대행사는 안 쓰는 축 {len(split.my_edge)}개 — 내 우위입니다")
-            for st in split.my_edge[:8]:
+            for st in split.my_edge[: 4 if getattr(args, "brief", False) else 8]:
                 print(f"  {labels.get(st.axis, st.axis)}  {st.value}  "
                       f"(광고 {st.their_ads}개 · ROAS {st.their_roas:.2f})")
         return
@@ -804,7 +897,8 @@ def build_parser() -> argparse.ArgumentParser:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("-c", "--config", help="설정 디렉터리 (기본 config/)")
     p.add_argument("-v", "--verbose", action="store_true")
-    sub = p.add_subparsers(dest="command", required=True)
+    p.set_defaults(func=cmd_guide)
+    sub = p.add_subparsers(dest="command")
 
     sp = sub.add_parser("plan", help="조합 매트릭스 전개")
     sp.add_argument("--matrix", help="매트릭스 yaml 경로 (기본 config/matrix.yaml)")
@@ -851,6 +945,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("scoreboard", help="인하우스 vs 대행사 비교 (읽기 전용)")
     sp.add_argument("--run")
     sp.add_argument("--period", help="화면에 표시할 기간 표기")
+    sp.add_argument("--brief", action="store_true", help="결론과 처방만")
     sp.set_defaults(func=cmd_scoreboard)
 
     sp = sub.add_parser("report", help="공유용 보고서 생성 (읽기 전용)")
@@ -868,6 +963,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--min-ads", type=int, default=2, help="이 개수 미만인 값은 순위에서 뺀다")
     sp.add_argument("--by-owner", action="store_true",
                     help="인하우스와 대행사를 갈라서 보고, 한쪽만 검증한 축을 찾는다")
+    sp.add_argument("--brief", action="store_true", help="승자와 가져올 것만")
     sp.set_defaults(func=cmd_dna)
 
     sp = sub.add_parser("apply", help="중단 제안 반영 (내 캠페인만)")

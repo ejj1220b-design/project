@@ -231,3 +231,39 @@ def _within(live_date: str, window: tuple[date, date]) -> bool:
     except (ValueError, IndexError):
         return False
     return window[0] <= d <= window[1]
+
+
+def brief(board: Scoreboard) -> list[str]:
+    """안내 모드용 요약. 결론 한 줄, 근거 세 줄, 처방 하나.
+
+    전체 표는 한 번에 20줄이라 무엇을 봐야 할지 흩어진다. 여기서는
+    '이기고 있나 / 왜 / 그래서 뭘 하나' 만 남긴다.
+    """
+    m, a = board.mine, board.agency
+    vol, eff, notes = board.verdict()
+
+    if eff and vol:
+        verdict = "물량·효율 둘 다 앞서고 있습니다"
+    elif eff:
+        verdict = "효율은 이기고, 물량은 지고 있습니다"
+    elif vol:
+        verdict = "물량은 이기고, 효율은 지고 있습니다"
+    else:
+        verdict = "물량·효율 둘 다 지고 있습니다"
+
+    lines = [
+        verdict,
+        "",
+        f"  ROAS        {m.roas:>6.2f}  vs  {a.roas:<6.2f}   {'▲' if m.roas > a.roas else '▽'}",
+        f"  신규 소재     {m.new_creatives:>6}  vs  {a.new_creatives:<6}   "
+        f"{'▲' if m.new_creatives > a.new_creatives else '▽'}",
+        f"  검증 중인 앵글  {m.testable_angles:>6}  vs  {a.testable_angles:<6}   "
+        f"{'▲' if m.testable_angles > a.testable_angles else '▽'}",
+    ]
+    if notes:
+        import textwrap
+
+        lines += ["", "지금 할 일"]
+        lines += textwrap.wrap(notes[-1 if len(notes) == 1 else 1], width=48,
+                               initial_indent="  ", subsequent_indent="  ")
+    return lines
