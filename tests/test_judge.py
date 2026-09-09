@@ -38,10 +38,25 @@ def test_kill_requires_confidence_not_just_low_roas(rules):
 
 
 def test_kill_when_sample_is_large_enough(rules):
-    """같은 ROAS 1.4 라도 구매 20건이면 목표 미달이 확실하다."""
-    j = judge_one(perf(spend=1_000_000, revenue=1_400_000, purchases=20, impressions=300_000, days_active=14), rules)
+    """같은 ROAS 1.4 라도 표본이 충분히 쌓이면 목표 미달이 확실해진다."""
+    j = judge_one(
+        perf(spend=1_500_000, revenue=2_100_000, purchases=42, impressions=400_000, days_active=14),
+        rules,
+    )
     assert j.verdict == Verdict.KILL
-    assert j.interval.upper < 2.0
+    assert j.interval.upper < float(rules["targets"]["target_roas"])
+
+
+def test_lowering_the_target_keeps_borderline_ads_alive(rules):
+    """목표선을 내리면 애매한 구간의 소재가 살아남는다. 목표선 변경의 의미가 이것이다."""
+    borderline = perf(spend=1_000_000, revenue=1_400_000, purchases=20,
+                      impressions=300_000, days_active=14)      # 구간 1.02~1.89
+
+    strict = {**rules, "targets": {**rules["targets"], "target_roas": 2.0}}
+    lenient = {**rules, "targets": {**rules["targets"], "target_roas": 1.8}}
+
+    assert judge_one(borderline, strict).verdict == Verdict.KILL
+    assert judge_one(borderline, lenient).verdict == Verdict.KEEP
 
 
 def test_scale_requires_lower_bound_above_scale_line(rules):
@@ -58,7 +73,7 @@ def test_warnings_do_not_change_verdict(rules):
 
 def test_sort_puts_scale_first_and_kill_last(rules):
     rows = [
-        perf(ad_id="kill", spend=1_000_000, revenue=1_400_000, purchases=20, impressions=300_000, days_active=14),
+        perf(ad_id="kill", spend=1_500_000, revenue=2_100_000, purchases=42, impressions=400_000, days_active=14),
         perf(ad_id="scale", spend=300_000, revenue=1_500_000, purchases=27, impressions=80_000, days_active=10),
         perf(ad_id="young", spend=10_000, revenue=0, purchases=0, impressions=500, days_active=1),
     ]

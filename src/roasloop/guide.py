@@ -95,8 +95,9 @@ def headline(state: State) -> list[str]:
 NEXT_HINT = {
     "harvest": ("2", "대행사와 비교하기"),
     "scoreboard": ("3", "뭐가 이겼는지 보기"),
-    "dna": ("5", "보고서 만들기"),
-    "judge": ("5", "보고서 만들기"),
+    "dna": ("4", "오래 꾸준한 소재"),
+    "steady": ("6", "보고서 만들기"),
+    "judge": ("6", "보고서 만들기"),
     "names": ("2", "대행사와 비교하기"),
     "doctor": ("1", "성과 가져오기"),
     "report": (None, None),
@@ -132,16 +133,17 @@ def actions_for(state: State, last: str | None = None) -> tuple[list[Action], in
         Action("1", "성과 가져오기", "최근 14일 · 계정을 읽기만 합니다", "harvest"),
         Action("2", "대행사와 비교하기", "물량 · 효율 · 학습", "scoreboard"),
         Action("3", "뭐가 이겼는지 보기", "대행사가 검증한 승자도 함께", "dna"),
-        Action("4", "끌 것 확인하기", "중단·확장 제안", "judge"),
-        Action("5", "보고서 만들기", "브라우저에서 열리는 파일", "report"),
-        Action("6", "광고명 진단", "소재 분석이 비어 있을 때", "names"),
-        Action("7", "설정 점검", "토큰 · 연결 상태", "doctor"),
+        Action("4", "오래 꾸준한 소재", "매일 구매가 나는 소재", "steady"),
+        Action("5", "끌 것 확인하기", "중단·확장 제안", "judge"),
+        Action("6", "보고서 만들기", "브라우저에서 열리는 파일", "report"),
+        Action("7", "광고명 진단", "소재 분석이 비어 있을 때", "names"),
+        Action("8", "설정 점검", "토큰 · 연결 상태", "doctor"),
     ]
 
     if not state.has_data or state.stale:
         return items, 0
     if state.unreadable_names > state.ads * 0.3:
-        return items, 5
+        return items, 6
 
     # 방금 뭔가를 했다면 그 다음 단계로 넘긴다. 같은 걸 계속 추천하면 진도가 안 나간다.
     if last:
@@ -154,6 +156,6 @@ def actions_for(state: State, last: str | None = None) -> tuple[list[Action], in
     if not state.has_judgement:
         return items, 1
     if not state.has_report:
-        return items, 4
+        return items, 5
     return items, 1
 

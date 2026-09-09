@@ -179,6 +179,7 @@ def render(
     currency: str = "KRW",
     excluded: list[tuple] | None = None,
     rules: dict | None = None,
+    steady=None,
 ) -> str:
     from .ownership import Owner
     from .scope import summarize_excluded
@@ -300,6 +301,43 @@ def render(
     if scales:
         _ad_table(scales, f"확장 제안 {len(scales)}개",
                   f"신뢰구간 하단이 확장선 {scale:.2f} 이상입니다. 목표 초과가 통계적으로 확실합니다.")
+
+    # 오래 꾸준한 소재
+    if steady and (steady.steady or steady.rising):
+        o.append("<h2>꾸준히 오래 구매를 일으킨 소재</h2>")
+        o.append("<p>기간 합계 ROAS 만 보면 '2주 내내 매일 팔린 소재' 와 "
+                 "'이틀 몰아서 팔린 소재' 가 같은 줄에 섭니다. 날짜별로 갈라 본 결과입니다. "
+                 "<strong>█</strong> 구매 있음 · <strong>▁</strong> 노출됐지만 구매 없음 · "
+                 "<strong>·</strong> 꺼져 있음.</p>")
+        for title, rows, note in (
+            (f"매출 기반 {len(steady.steady)}개", steady.steady,
+             "오래됐고 구매가 끊기지 않습니다. 2주치 숫자만 보고 끄면 매출 기반이 사라집니다."),
+            (f"스테디 후보 {len(steady.rising)}개", steady.rising,
+             "리듬은 좋은데 아직 어립니다. 더 태워볼 대상입니다."),
+        ):
+            if not rows:
+                continue
+            o.append(f"<h3>{_esc(title)}</h3>")
+            o.append(f"<p style='font-size:13px'>{_esc(note)}</p>")
+            o.append('<div class="scroll"><table><thead><tr><th>리듬</th><th>광고</th>'
+                     '<th class="num">나이</th><th class="num">구매일</th>'
+                     '<th class="num">구매</th><th class="num">ROAS</th>'
+                     '<th class="num">지출</th></tr></thead><tbody>')
+            for h in rows[:20]:
+                age = f"{h.age_days}일" if h.age_days else "—"
+                o.append(
+                    f'<tr><td style="font-family:ui-monospace,monospace;letter-spacing:1px;'
+                    f'white-space:nowrap">{_esc(h.sparkline())}</td>'
+                    f'<td class="name">{_esc(h.ad_name)}</td>'
+                    f'<td class="num">{age}</td>'
+                    f'<td class="num">{h.purchase_days}/{h.active_days}'
+                    f'<div style="font-size:10.5px;color:var(--muted)">'
+                    f'{h.purchase_day_rate:.0%}</div></td>'
+                    f'<td class="num">{h.purchases}</td>'
+                    f'<td class="num">{h.roas:.2f}</td>'
+                    f'<td class="num">{_fmt(h.spend)}</td></tr>'
+                )
+            o.append("</tbody></table></div>")
 
     # 승자 축
     if dna_report and dna_report.axes:

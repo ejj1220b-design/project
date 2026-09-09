@@ -12,6 +12,7 @@
     roasloop campaigns 캠페인 목록과 소유 분류 확인
     roasloop report   대행사·상급자에게 공유할 보고서 (마크다운)
     roasloop names    광고명이 네이밍 규칙과 맞는지 진단
+    roasloop steady   꾸준히 오래 구매를 일으킨 소재
     roasloop scoreboard 인하우스 vs 대행사 (물량 · 효율 · 학습)
     roasloop dna      살아남은 축 분석 → 다음 라운드 축
                       --by-owner 를 붙이면 대행사가 검증한 승자를 찾아낸다
@@ -237,11 +238,31 @@ def cmd_harvest(args, cfg: Config) -> None:
         attribution_windows=cfg.conversion.get("attribution_windows"),
         campaign_filter=args.campaign,
     )
+    # 날짜별 성과 — '꾸준히 오래 판 소재' 를 가리는 데 쓴다. 합계만으로는 구분이 안 된다.
+    if perfs and not args.no_daily:
+        try:
+            daily = insights.fetch_daily(
+                client, since, until,
+                action_types=cfg.conversion.get("action_types", ["omni_purchase", "purchase"]),
+                attribution_windows=cfg.conversion.get("attribution_windows"),
+                campaign_filter=args.campaign,
+            )
+            (run_dir_daily := _run_dir(args.stamp) / "daily.json").write_text(
+                json.dumps(daily, ensure_ascii=False), encoding="utf-8"
+            )
+            print(f"날짜별 {len(daily)}행 → {run_dir_daily}")
+        except Exception as exc:                    # noqa: BLE001
+            print(f"참고: 날짜별 성과를 가져오지 못했습니다 ({str(exc).splitlines()[0]})")
+            print("      스테디 소재 분석은 건너뜁니다.")
+
     if perfs and not args.skip_age:
         # 광고 나이는 게이트 정확도를 높이는 보조 정보다. 여기서 실패해도 성과 수집은 살린다.
         try:
             ages = insights.fetch_days_active(client, [p.ad_id for p in perfs if p.ad_id])
             insights.apply_true_age(perfs, ages)
+            (_run_dir(args.stamp) / "ages.json").write_text(
+                json.dumps(ages, ensure_ascii=False), encoding="utf-8"
+            )
         except Exception as exc:                    # noqa: BLE001
             print(f"참고: 광고 생성일 조회를 건너뜁니다 ({exc})")
             print("      조회 기간을 그대로 가동 일수로 씁니다. 최근 만든 광고가")
@@ -272,6 +293,16 @@ def cmd_judge(args, cfg: Config) -> None:
         sys.exit("판정 대상이 없습니다. config/rules.yaml 의 measurement 설정을 확인하세요.")
     judgements = judge_all(perfs, cfg.rules)
     own = cfg.ownership
+
+    steady_report = _load_steady(run, cfg)
+    protect = bool(cfg.rules.get("steady", {}).get("protect_from_kill", True))
+    steady_ids = steady_report.steady_ids if (steady_report and protect) else set()
+    for j in judgements:
+        if j.verdict == Verdict.KILL and j.perf.ad_id in steady_ids:
+            j.warnings.append(
+                "꾸준히 오래 구매를 일으켜온 소재입니다 — 2주치 숫자만 보고 끄지 마세요 "
+                "(roasloop steady)"
+            )
 
     _print_excluded(dropped, cfg.currency)
     print(rp.judgement_summary(judgements, cfg.currency))
@@ -498,6 +529,7 @@ def cmd_guide(args, cfg: Config) -> None:
         "scoreboard": lambda: cmd_scoreboard(_defaults("scoreboard", brief=True), cfg),
         "dna": lambda: cmd_dna(_defaults("dna", by_owner=True, brief=True), cfg),
         "judge": lambda: cmd_judge(_defaults("judge", brief=True), cfg),
+        "steady": lambda: cmd_steady(_defaults("steady", limit=8, no_spiky=True), cfg),
         "report": lambda: cmd_report(_defaults("report"), cfg),
         "names": lambda: cmd_names(_defaults("names"), cfg),
         "doctor": lambda: cmd_doctor(_defaults("doctor"), cfg),
@@ -555,7 +587,8 @@ def _defaults(command: str, **overrides):
     base = dict(
         run=None, stamp=None, period=None, limit=0, brief=False, top=5, keep_top=2,
         min_ads=2, by_owner=False, samples=3, out=None, no_dna=False, show=False,
-        days=14, since=None, until=None, campaign=None, skip_age=True, all=False,
+        days=14, since=None, until=None, campaign=None, skip_age=False, no_daily=False,
+        all=False, no_spiky=False,
         verbose=False,
     )
     base.update(overrides)
@@ -627,6 +660,69 @@ def cmd_names(args, cfg: Config) -> None:
     print("   광고명 자체는 바꾸지 않아도 됩니다 — 읽는 쪽을 맞추면 됩니다.")
 
 
+def _load_steady(run: Path, cfg: Config):
+    """스테디 리포트. 날짜별 데이터가 없으면 None."""
+    from . import steady as st
+
+    daily_path = run / "daily.json"
+    if not daily_path.exists():
+        return None
+    daily = json.loads(daily_path.read_text(encoding="utf-8"))
+    ages_path = run / "ages.json"
+    ages = json.loads(ages_path.read_text(encoding="utf-8")) if ages_path.exists() else {}
+    campaigns = {p.ad_id: p.campaign_name for p in _load_perf(run / "perf.json")}
+    scoped = {p.ad_id for p in _scoped(run, cfg)[0]}
+    daily = [r for r in daily if r.get("ad_id") in scoped]
+    return st.build(daily, cfg.rules, ages, campaigns)
+
+
+def cmd_steady(args, cfg: Config) -> None:
+    """꾸준히 오래 구매를 일으킨 소재."""
+    run = Path(args.run) if args.run else _latest_run()
+    report = _load_steady(run, cfg)
+    if report is None:
+        sys.exit(
+            "날짜별 성과 데이터가 없습니다.\n"
+            "  `roasloop harvest` 를 다시 실행하면 함께 수집됩니다."
+        )
+
+    own = cfg.ownership
+    cfg_st = cfg.rules.get("steady", {})
+    print(f"■ 꾸준히 오래 구매를 일으킨 소재 {len(report.steady)}개\n")
+    print(f"  기준: 활동 {cfg_st.get('min_active_days', 7)}일 이상 · "
+          f"구매 발생일 {cfg_st.get('min_purchase_days', 4)}일 이상 · "
+          f"구매일 비율 {float(cfg_st.get('min_purchase_day_rate', 0.4)):.0%} 이상")
+    print(f"  막대: █ 구매 있음   ▁ 노출은 됐지만 구매 없음   · 꺼져 있음\n")
+
+    if not report.steady:
+        print("  조건을 만족하는 소재가 없습니다.")
+        print("  기간을 늘려보거나(--days 30), config/rules.yaml 의 steady 기준을 낮춰보세요.")
+    for h in report.steady[: args.limit]:
+        age = f"{h.age_days}일차" if h.age_days else "나이 미상"
+        print(f"  {h.sparkline()}  {h.ad_name}")
+        print(f"  {'':14}  [{own.label(h.campaign_name)}] {age} · "
+              f"{h.active_days}일 중 {h.purchase_days}일 구매 "
+              f"({h.purchase_day_rate:.0%}) · 구매 {h.purchases} · ROAS {h.roas:.2f} · "
+              f"지출 {h.spend:,.0f}")
+
+    if report.rising:
+        print(f"\n■ 리듬은 좋은데 아직 어린 소재 {len(report.rising)}개 — 스테디 후보")
+        print("  더 태워보면 위 목록으로 올라올 수 있습니다.\n")
+        for h in report.rising[: args.limit]:
+            age = f"{h.age_days}일차" if h.age_days else "나이 미상"
+            print(f"  {h.sparkline()}  {h.ad_name}")
+            print(f"  {'':14}  {age} · {h.active_days}일 중 {h.purchase_days}일 구매 "
+                  f"({h.purchase_day_rate:.0%}) · ROAS {h.roas:.2f}")
+
+    if report.spiky and not args.no_spiky:
+        print(f"\n■ 매출은 났지만 몰려서 난 소재 {len(report.spiky)}개")
+        print("  같은 ROAS 라도 다음 달에 기대할 수 있는 것이 다릅니다.\n")
+        for h in report.spiky[: args.limit]:
+            print(f"  {h.sparkline()}  {h.ad_name}")
+            print(f"  {'':14}  {h.active_days}일 중 {h.purchase_days}일만 구매 · "
+                  f"구매 없이 최장 {h.longest_dry_spell}일 · ROAS {h.roas:.2f}")
+
+
 def cmd_scoreboard(args, cfg: Config) -> None:
     """인하우스 vs 대행사. 물량과 효율을 같은 화면에서 본다."""
     from . import scoreboard as sb
@@ -686,6 +782,7 @@ def cmd_report(args, cfg: Config) -> None:
         )
 
     period = args.period or run.name
+    steady_report = _load_steady(run, cfg)
     text = rp.markdown_report(
         judgements, dna_report, cfg.ownership,
         period=period, currency=cfg.currency, excluded=dropped,
@@ -698,6 +795,7 @@ def cmd_report(args, cfg: Config) -> None:
         html_rp.render(
             judgements, dna_report, cfg.ownership,
             period=period, currency=cfg.currency, excluded=dropped, rules=cfg.rules,
+            steady=steady_report,
         ),
         (Path(args.out).with_suffix(".html") if args.out else run / "report.html"),
     )
@@ -921,6 +1019,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--since"), sp.add_argument("--until")
     sp.add_argument("--campaign", help="캠페인명 부분일치 필터")
     sp.add_argument("--skip-age", action="store_true", help="광고 나이 조회를 건너뛴다")
+    sp.add_argument("--no-daily", action="store_true", help="날짜별 성과 수집을 건너뛴다")
     sp.add_argument("--stamp")
     sp.set_defaults(func=cmd_harvest)
 
@@ -941,6 +1040,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--run")
     sp.add_argument("--samples", type=int, default=5, help="칸 수별로 보여줄 예시 개수")
     sp.set_defaults(func=cmd_names)
+
+    sp = sub.add_parser("steady", help="꾸준히 오래 구매를 일으킨 소재 (읽기 전용)")
+    sp.add_argument("--run")
+    sp.add_argument("--limit", type=int, default=15)
+    sp.add_argument("--no-spiky", action="store_true", help="몰아서 난 소재 목록 생략")
+    sp.set_defaults(func=cmd_steady)
 
     sp = sub.add_parser("scoreboard", help="인하우스 vs 대행사 비교 (읽기 전용)")
     sp.add_argument("--run")

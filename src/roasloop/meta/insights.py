@@ -81,6 +81,47 @@ def fetch(
     return out
 
 
+def fetch_daily(
+    client: MetaClient,
+    since: date,
+    until: date,
+    action_types: list[str],
+    attribution_windows: list[str] | None = None,
+    campaign_filter: str | None = None,
+) -> list[dict]:
+    """날짜별 광고 성과.
+
+    기간 합계만 보면 '2주 내내 꾸준히 판 소재' 와 '하루 몰아서 판 소재' 가 같은 줄에
+    선다. time_increment=1 로 하루 단위로 받아 그 둘을 갈라낸다.
+    """
+    params: dict = {
+        "level": "ad",
+        "fields": "ad_id,ad_name,spend,impressions,actions,action_values",
+        "time_range": f'{{"since":"{since.isoformat()}","until":"{until.isoformat()}"}}',
+        "time_increment": 1,
+        "limit": 500,
+    }
+    if attribution_windows:
+        params["action_attribution_windows"] = ",".join(attribution_windows)
+    if campaign_filter:
+        params["filtering"] = (
+            '[{"field":"campaign.name","operator":"CONTAIN","value":"%s"}]' % campaign_filter
+        )
+
+    out: list[dict] = []
+    for row in client.paged(client.account_path("insights"), params):
+        out.append({
+            "ad_id": row.get("ad_id", ""),
+            "ad_name": row.get("ad_name", ""),
+            "date": row.get("date_start", ""),
+            "spend": float(row.get("spend") or 0),
+            "impressions": int(row.get("impressions") or 0),
+            "revenue": _pick(row.get("action_values"), action_types),
+            "purchases": int(_pick(row.get("actions"), action_types)),
+        })
+    return out
+
+
 def fetch_days_active(client: MetaClient, ad_ids: list[str]) -> dict[str, int]:
     """광고별 실제 가동 일수. 기간 전체를 돌지 않은 광고를 게이트에서 구제한다.
 
