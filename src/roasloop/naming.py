@@ -144,44 +144,51 @@ class AdsetName:
 
 @dataclass(frozen=True)
 class AdName:
-    """광고(소재)명. 승자 DNA 를 분해해서 꺼내는 대상이 바로 이 7개 슬롯이다."""
+    """광고(소재)명. 승자 DNA 를 분해해서 꺼내는 대상이다.
 
-    promo: str
-    product: str
-    creative_type: str
-    copy: str            # 자유입력 — 카피 앵글 코드
-    object: str          # 자유입력 — 화면에 실제로 보이는 오브제
-    landing_id: str
-    live_date: str       # YYMMDD
+    계정마다, 심지어 한 계정 안에서도 형식이 다르다. 그래서 슬롯 구성을 고정하지 않고
+    config/naming.yaml 이 정의한 형식들을 차례로 맞춰본다. 분석에 실제로 쓰이는 축은
+    promo · product · creative_type · copy · object 다섯이고, 나머지 칸은 읽어서 보관만 한다.
+    """
+
+    promo: str = ""
+    product: str = ""
+    creative_type: str = ""
+    copy: str = ""
+    object: str = ""
+    landing_id: str = ""
+    live_date: str = ""
     note: str = ""
+    #: 이 이름을 읽어낸 형식의 이름 (진단용)
+    format_name: str = ""
+    #: 분석에 쓰지 않는 보조 슬롯 (language, channel, landing_product 등)
+    extra: tuple[tuple[str, str], ...] = ()
 
-    def render(self) -> str:
-        body = FIELD_SEP.join([
-            self.promo, self.product, self.creative_type,
-            self.copy, self.object, self.landing_id, self.live_date,
-        ])
+    def render(self, fmt: "NameFormat | None" = None) -> str:
+        fmt = fmt or DEFAULT_FORMAT
+        values = {**dict(self.extra), **{
+            "promo": self.promo, "product": self.product, "creative_type": self.creative_type,
+            "copy": self.copy, "object": self.object,
+            "landing_id": self.landing_id, "live_date": self.live_date,
+        }}
+        body = FIELD_SEP.join(values.get(slot, "") for slot in fmt.slots)
         return f"{body}{NOTE_SEP}{self.note}" if self.note else body
 
     @classmethod
-    def parse(cls, name: str) -> "AdName":
-        body, note = _split_note(name)
-        parts = body.split(FIELD_SEP)
-        if len(parts) != len(AD_SLOTS):
-            raise NamingError(
-                f"광고명 슬롯 수가 맞지 않습니다 (기대 {len(AD_SLOTS)}, 실제 {len(parts)}): {name!r}\n"
-                "자유입력 칸(카피·오브제)에 언더스코어나 공백이 섞이면 이렇게 됩니다."
-            )
-        return cls(*parts, note=note)
+    def parse(cls, name: str, parser: "NameParser | None" = None) -> "AdName":
+        return (parser or DEFAULT_PARSER).parse(name)
 
     def validate(self, taxonomy: dict, landings: dict | None = None) -> "AdName":
-        _check_enum(self.promo, taxonomy["promo"], "광고.promo")
-        _check_enum(self.product, taxonomy["product"], "광고.product")
         _check_enum(self.creative_type, taxonomy["creative_type"], "광고.creative_type")
         _check_free(self.copy, "광고.copy")
         _check_free(self.object, "광고.object")
         if not re.fullmatch(r"\d{6}", self.live_date):
             raise NamingError(f"광고.live_date 는 YYMMDD 6자리여야 합니다: {self.live_date!r}")
-        if landings is not None and self.landing_id not in landings:
+        if self.product:
+            _check_enum(self.product, taxonomy["product"], "광고.product")
+        if self.promo:
+            _check_enum(self.promo, taxonomy["promo"], "광고.promo")
+        if landings is not None and self.landing_id and self.landing_id not in landings:
             raise NamingError(
                 f"광고.landing_id: 랜딩 마스터에 없는 ID {self.landing_id!r}. "
                 "config/landing.yaml 에 먼저 추가하세요."
@@ -203,8 +210,98 @@ class AdName:
         return replace(self, **changes)
 
 
+@dataclass(frozen=True)
+class NameFormat:
+    name: str
+    slots: tuple[str, ...]
+    example: str = ""
+
+    def __len__(self) -> int:
+        return len(self.slots)
+
+
+#: 분석 축으로 쓰는 슬롯. 나머지는 extra 로 들어간다.
+CORE_SLOTS = ("promo", "product", "creative_type", "copy", "object", "landing_id", "live_date")
+
+DEFAULT_FORMAT = NameFormat(
+    name="v1.0",
+    slots=("promo", "product", "creative_type", "copy", "object", "landing_id", "live_date"),
+)
+
+
+class NameParser:
+    """여러 형식을 차례로 맞춰보고 가장 잘 들어맞는 것으로 읽는다."""
+
+    def __init__(self, config: dict | None = None):
+        config = config or {}
+        raw = config.get("formats") or []
+        self.formats = [
+            NameFormat(
+                name=str(f.get("name", f"형식{i + 1}")),
+                slots=tuple(str(x) for x in f["slots"]),
+                example=str(f.get("example", "")),
+            )
+            for i, f in enumerate(raw)
+            if isinstance(f, dict) and f.get("slots")
+        ] or [DEFAULT_FORMAT]
+        self.validators = {
+            k: re.compile(v) for k, v in (config.get("validators") or {}).items()
+        }
+        self.aliases: dict[str, dict[str, str]] = {
+            slot: dict(mapping) for slot, mapping in (config.get("aliases") or {}).items()
+        }
+
+    @property
+    def default_format(self) -> NameFormat:
+        return self.formats[0]
+
+    def normalize(self, slot: str, value: str) -> str:
+        return self.aliases.get(slot, {}).get(value, value)
+
+    def _score(self, fmt: NameFormat, parts: list[str]) -> int:
+        """형식이 얼마나 들어맞는지. 검사에 걸리는 칸이 많을수록 높다."""
+        if len(parts) != len(fmt.slots):
+            return -1
+        score = 0
+        for slot, value in zip(fmt.slots, parts):
+            check = self.validators.get(slot)
+            if check is None:
+                continue
+            score += 2 if check.search(self.normalize(slot, value)) else -3
+        return score
+
+    def parse(self, name: str) -> AdName:
+        body, note = _split_note(name)
+        parts = body.split(FIELD_SEP)
+
+        best: tuple[int, NameFormat] | None = None
+        for fmt in self.formats:
+            score = self._score(fmt, parts)
+            if score < 0:
+                continue
+            if best is None or score > best[0]:
+                best = (score, fmt)
+        if best is None:
+            expected = " 또는 ".join(f"{len(f)}칸({f.name})" for f in self.formats)
+            raise NamingError(
+                f"어느 형식에도 맞지 않습니다 (칸 수 {len(parts)}, 기대 {expected}): {name!r}\n"
+                "자유입력 칸(카피·오브제)에 언더스코어나 공백이 섞이면 이렇게 됩니다."
+            )
+
+        fmt = best[1]
+        values = {slot: self.normalize(slot, v) for slot, v in zip(fmt.slots, parts)}
+        core = {k: values.get(k, "") for k in CORE_SLOTS}
+        extra = tuple(
+            (k, v) for k, v in values.items() if k not in CORE_SLOTS and not k.startswith("_")
+        )
+        return AdName(**core, note=note, format_name=fmt.name, extra=extra)
+
+
+DEFAULT_PARSER = NameParser()
+
+
 def parse_triplet(
-    campaign: str, adset: str, ad: str
+    campaign: str, adset: str, ad: str, parser: NameParser | None = None
 ) -> tuple[CampaignName | None, AdsetName | None, AdName | None]:
     """세 이름을 한 번에 파싱한다. 규칙을 벗어난 이름은 None 으로 떨어뜨린다.
 
@@ -220,5 +317,5 @@ def parse_triplet(
     return (
         _try(CampaignName.parse, campaign),
         _try(AdsetName.parse, adset),
-        _try(AdName.parse, ad),
+        _try(lambda v: AdName.parse(v, parser), ad),
     )

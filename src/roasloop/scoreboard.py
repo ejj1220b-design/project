@@ -163,6 +163,7 @@ def build(
     ownership,
     window: tuple[date, date] | None = None,
     period: str = "",
+    parser=None,
 ) -> Scoreboard:
     groups = ownership.split(judgements, key=lambda j: j.perf.campaign_name, for_report=True)
     sides = {}
@@ -183,7 +184,7 @@ def build(
             if j.verdict != Verdict.INSUFFICIENT:
                 side.judgeable += 1
             try:
-                ad = AdName.parse(p.ad_name)
+                ad = AdName.parse(p.ad_name, parser)
             except NamingError:
                 continue
             side.copy_angles.add(ad.copy)

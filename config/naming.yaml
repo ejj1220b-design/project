@@ -1,0 +1,45 @@
+# 계정에 실제로 쓰이는 광고명 형식.
+#
+# 한 계정 안에 형식이 여러 개 섞여 있어도 된다. 위에서부터 차례로 맞춰보고,
+# 가장 잘 들어맞는 것으로 읽는다. 광고명을 바꾸는 대신 읽는 쪽을 맞추는 방식이다.
+#
+# 쓸 수 있는 슬롯 이름
+#   promo product creative_type copy object landing_id live_date
+#   language channel landing_product  (읽기만 하고 분석에는 안 쓰는 보조 슬롯)
+#   _ 로 시작하면 무시할 칸 (예: _skip)
+
+formats:
+  # 인하우스 — "리터니티_해외광고_네이밍_UTM_생성기" 시트 형식
+  - name: 인하우스
+    example: YulmuMask_KR_Video_Regular-SPFOFF_중년요철모공_피부확대_SPF.YulmuMask.PDP_260902
+    slots: [product, language, creative_type, promo, copy, object, landing_id, live_date]
+
+  # 대행사 — 네이밍 규칙 v1.0 계열. 프로모션이 맨 앞이고 랜딩이 두 칸으로 갈린다.
+  - name: 대행사
+    example: 26Regular_YulmuMask_VID_눈가요요철_대표님_P.SPF_YulmuMask_260731
+    slots: [promo, product, creative_type, copy, object, channel, landing_product, live_date]
+
+  # 네이밍 규칙 v1.0 원문 (7칸). 남아 있을 수 있어 함께 시도한다.
+  - name: v1.0
+    example: 26Regular_YulmuMask_Video_사우나필수템_공병템_SPF.YulmuMask.PDP_260730
+    slots: [promo, product, creative_type, copy, object, landing_id, live_date]
+
+# 어느 형식인지 가릴 때 쓰는 검사. 맞는 칸이 많은 형식을 고른다.
+validators:
+  live_date: '^\d{6}$'
+  creative_type: '^(Video|Image|GIF|VID|IMG|MPA|REC|BCA|Carousel|adcode|MOV)$'
+  language: '^(KR|EN|JP|FR|ES|ZH)$'
+
+# 표기가 다른 같은 값을 하나로 모은다.
+#
+# 이게 없으면 대행사의 VID 와 인하우스의 Video 가 다른 값으로 집계되어,
+# "대행사가 검증한 승자" 비교가 통째로 어긋난다.
+aliases:
+  creative_type:
+    VID: Video
+    MOV: Video
+    IMG: Image
+  product:
+    # 인하우스는 BBRMask, 대행사는 BBRpack 으로 쓰지만 같은 제품이다.
+    # (인하우스 광고명의 랜딩ID 가 SPF.BBRpack.PDP 인 것으로 확인)
+    BBRMask: BBRpack

@@ -100,6 +100,7 @@ def build(
     judgements: list[Judgement],
     level: float = 0.80,
     fallback_aov: float = 0.0,
+    parser=None,
 ) -> DnaReport:
     """판정 결과 전체에서 축별 성과를 집계한다.
 
@@ -112,7 +113,7 @@ def build(
     for j in judgements:
         perf: AdPerformance = j.perf
         try:
-            ad = AdName.parse(perf.ad_name)
+            ad = AdName.parse(perf.ad_name, parser)
         except NamingError:
             report.unparsed.append(perf.ad_name)
             continue
@@ -215,6 +216,7 @@ def compare_owners(
     fallback_aov: float = 0.0,
     min_ads: int = 2,
     min_lower: float | None = None,
+    parser=None,
 ) -> OwnerSplit:
     """소유별로 DNA 를 따로 뽑고, 한쪽만 검증한 승자를 찾아낸다.
 
@@ -226,8 +228,8 @@ def compare_owners(
     from .ownership import Owner
 
     groups = ownership.split(judgements, key=lambda j: j.perf.campaign_name, for_report=True)
-    mine = build(groups[Owner.MINE], level, fallback_aov)
-    agency = build(groups[Owner.AGENCY], level, fallback_aov)
+    mine = build(groups[Owner.MINE], level, fallback_aov, parser)
+    agency = build(groups[Owner.AGENCY], level, fallback_aov, parser)
 
     def _find(source: DnaReport, other: DnaReport) -> list[Steal]:
         bar = max(other.baseline_roas, min_lower or 0.0)

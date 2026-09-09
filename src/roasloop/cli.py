@@ -488,65 +488,67 @@ def cmd_campaigns(args, cfg: Config) -> None:
 
 
 def cmd_names(args, cfg: Config) -> None:
-    """광고명이 네이밍 규칙과 맞는지 진단한다.
+    """광고명을 어떤 형식으로 읽고 있는지, 못 읽는 것은 무엇인지 보여준다.
 
-    DNA 분석과 신규 소재 집계는 광고명 역파싱에 전적으로 의존한다. 계정의 실제
-    광고명이 규칙과 다르면 그 기능이 통째로 비는데, 화면에는 '0개' 로만 나와서
-    무엇이 문제인지 알기 어렵다. 그래서 실제 형태를 직접 보여준다.
+    DNA 분석과 신규 소재 집계는 광고명 역파싱에 전적으로 의존한다. 못 읽으면 화면에
+    '0개' 로만 나와서 무엇이 문제인지 알 수 없다. 그래서 실제 형태를 직접 보여준다.
     """
     from collections import Counter, defaultdict
 
-    from .naming import AD_SLOTS, AdName, NamingError
+    from .naming import AdName, NamingError
 
     run = Path(args.run) if args.run else _latest_run()
     perfs = _load_perf(run / "perf.json")
     if not perfs:
         sys.exit("성과 데이터가 비어 있습니다.")
+    parser = cfg.parser
+    own = cfg.ownership
 
-    ok_names, bad_names = [], []
+    by_format: dict[str, list[str]] = defaultdict(list)
+    bad: list[tuple[str, str]] = []
     for p_ in perfs:
         try:
-            AdName.parse(p_.ad_name)
-            ok_names.append(p_.ad_name)
+            by_format[AdName.parse(p_.ad_name, parser).format_name].append(p_.ad_name)
         except NamingError:
-            bad_names.append(p_.ad_name)
+            bad.append((p_.ad_name, own.labels[own.report_bucket(p_.campaign_name)]))
 
     total = len(perfs)
-    print(f"■ 광고명 {total}개 중 규칙에 맞는 것 {len(ok_names)}개 ({len(ok_names) / total:.0%})\n")
+    read = total - len(bad)
+    print(f"■ 광고명 {total}개 중 읽어낸 것 {read}개 ({read / total:.0%})\n")
+    for fmt in parser.formats:
+        names = by_format.get(fmt.name, [])
+        mark = "✓" if names else "-"
+        print(f"  {mark} {fmt.name:<10} {len(names):>4}개   ({len(fmt)}칸: "
+              f"{'_'.join(fmt.slots)})")
+        for name in names[: args.samples]:
+            print(f"       {name}")
 
-    if not bad_names:
-        print("모두 규칙에 맞습니다. DNA 분석이 정상 동작합니다.")
+    if not bad:
+        print("\n모두 읽었습니다. DNA 분석이 정상 동작합니다.")
         return
 
-    print(f"규칙 기준: 광고명은 '_' 로 구분된 {len(AD_SLOTS)}칸이어야 합니다.")
-    print("  " + "_".join(f"{{{sl}}}" for sl in AD_SLOTS))
-    print("  예) 26Regular_YulmuMask_Video_사우나필수템_공병템_SPF.YulmuMask.PDP_260730\n")
-
-    # 칸 수별로 묶어서 보여준다 — 몇 칸짜리가 주류인지가 규칙 조정의 출발점이다
-    by_slots: dict[int, list[str]] = defaultdict(list)
-    for name in bad_names:
-        by_slots[len(name.split("^")[0].split("_"))].append(name)
-
-    print(f"■ 규칙을 벗어난 {len(bad_names)}개 — 칸 수별 분포")
+    print(f"\n■ 읽지 못한 {len(bad)}개")
+    by_slots: dict[int, list[tuple[str, str]]] = defaultdict(list)
+    for name, owner in bad:
+        by_slots[len(name.split("^")[0].split("_"))].append((name, owner))
     for slots in sorted(by_slots, key=lambda k: -len(by_slots[k])):
-        names = by_slots[slots]
-        print(f"\n  [{slots}칸] {len(names)}개"
-              f"{'  ← 규칙은 ' + str(len(AD_SLOTS)) + '칸' if slots != len(AD_SLOTS) else ''}")
-        for name in names[: args.samples]:
-            print(f"    {name}")
+        rows = by_slots[slots]
+        known = [f.name for f in parser.formats if len(f) == slots]
+        note = f"  ← {slots}칸 형식이 없습니다" if not known else "  ← 칸 수는 맞지만 값이 안 맞습니다"
+        print(f"\n  [{slots}칸] {len(rows)}개{note}")
+        for name, owner in rows[: args.samples]:
+            print(f"       [{owner}] {name}")
 
-    # 구분자 실태
     seps = Counter()
-    for name in bad_names:
-        for ch in ("_", "-", "|", ".", " ", "^"):
+    for name, _ in bad:
+        for ch in ("_", "-", "|", ".", " "):
             if ch in name:
                 seps[ch] += 1
-    print("\n■ 광고명에 쓰인 구분자")
-    for ch, cnt in seps.most_common():
-        shown = "공백" if ch == " " else ch
-        print(f"    {shown}   {cnt}개 광고 ({cnt / len(bad_names):.0%})")
-
-    print("\n※ 이 결과를 그대로 공유해 주시면 규칙을 실제 광고명에 맞게 조정할 수 있습니다.")
+    if seps:
+        print("\n  쓰인 구분자: " + ", ".join(
+            f"{'공백' if ch == ' ' else ch} {cnt}개" for ch, cnt in seps.most_common()
+        ))
+    print("\n※ 위 예시를 공유해 주시면 config/naming.yaml 에 형식을 추가할 수 있습니다.")
     print("   광고명 자체는 바꾸지 않아도 됩니다 — 읽는 쪽을 맞추면 됩니다.")
 
 
@@ -560,7 +562,7 @@ def cmd_scoreboard(args, cfg: Config) -> None:
     window = _window(run)
     period = args.period or (f"{window[0]} ~ {window[1]}" if window else run.name)
 
-    board = sb.build(judgements, cfg.ownership, window=window, period=period)
+    board = sb.build(judgements, cfg.ownership, window=window, period=period, parser=cfg.parser)
     _print_excluded(dropped, cfg.currency)
 
     print(f"■ 스코어보드 · {period}\n")
@@ -598,6 +600,7 @@ def cmd_report(args, cfg: Config) -> None:
             judgements,
             level=float(conf.get("level", 0.80)),
             fallback_aov=float(conf.get("fallback_aov", 0)),
+            parser=cfg.parser,
         )
 
     period = args.period or run.name
@@ -683,6 +686,7 @@ def cmd_dna(args, cfg: Config) -> None:
         judgements,
         level=float(conf.get("level", 0.80)),
         fallback_aov=float(conf.get("fallback_aov", 0)),
+        parser=cfg.parser,
     )
 
     if args.by_owner:
@@ -692,6 +696,7 @@ def cmd_dna(args, cfg: Config) -> None:
             fallback_aov=float(conf.get("fallback_aov", 0)),
             min_ads=args.min_ads,
             min_lower=float(cfg.rules.get("targets", {}).get("target_roas", 0)),
+            parser=cfg.parser,
         )
         labels = {"copy": "카피 앵글", "object": "오브제", "creative_type": "소재유형",
                   "product": "상품", "promo": "프로모션"}
@@ -752,7 +757,7 @@ def cmd_breed(args, cfg: Config) -> None:
     judgements = judge_all(perfs, cfg.rules)
     conf = cfg.rules.get("confidence", {})
     report = dna_mod.build(judgements, level=float(conf.get("level", 0.80)),
-                           fallback_aov=float(conf.get("fallback_aov", 0)))
+                           fallback_aov=float(conf.get("fallback_aov", 0)), parser=cfg.parser)
 
     reviews = None
     if args.reviews and Path(args.reviews).exists():

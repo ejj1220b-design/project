@@ -53,6 +53,7 @@ class Config:
     account: dict
     rules: dict
     ownership_config: dict = field(default_factory=dict)
+    naming_config: dict = field(default_factory=dict)
     matrix: dict = field(default_factory=dict)
     config_dir: Path = DEFAULT_CONFIG_DIR
 
@@ -61,12 +62,14 @@ class Config:
         d = Path(config_dir) if config_dir else DEFAULT_CONFIG_DIR
         matrix_path = d / "matrix.yaml"
         ownership_path = d / "ownership.yaml"
+        naming_path = d / "naming.yaml"
         return cls(
             taxonomy=_load(d / "taxonomy.yaml"),
             landings=_load(d / "landing.yaml").get("landings", {}),
             account=_load(d / "account.yaml"),
             rules=_load(d / "rules.yaml"),
             ownership_config=_load(ownership_path) if ownership_path.exists() else {},
+            naming_config=_load(naming_path) if naming_path.exists() else {},
             matrix=_load(matrix_path) if matrix_path.exists() else {},
             config_dir=d,
         )
@@ -87,6 +90,12 @@ class Config:
     @property
     def currency(self) -> str:
         return self.account.get("account", {}).get("currency", "KRW")
+
+    @property
+    def parser(self):
+        """광고명 파서. 설정이 없으면 규칙 v1.0 한 가지만 시도한다."""
+        from .naming import NameParser
+        return NameParser(self.naming_config)
 
     @property
     def scope(self):

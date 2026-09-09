@@ -24,7 +24,11 @@ def test_adset_roundtrip_keeps_dot_syntax():
 def test_ad_roundtrip_with_korean_free_fields():
     a = AdName("26Regular", "YulmuMask", "Video", "30대부터율무", "ai목소리",
                "SPF.YulmuMask.PDP", "260429", "CA")
-    assert AdName.parse(a.render()) == a
+    back = AdName.parse(a.render())
+    assert (back.promo, back.product, back.creative_type, back.copy, back.object,
+            back.landing_id, back.live_date, back.note) == (
+        "26Regular", "YulmuMask", "Video", "30대부터율무", "ai목소리",
+        "SPF.YulmuMask.PDP", "260429", "CA")
     assert a.dna() == {
         "promo": "26Regular", "product": "YulmuMask", "creative_type": "Video",
         "copy": "30대부터율무", "object": "ai목소리",
@@ -46,7 +50,7 @@ def test_free_field_rejects_separators(cfg, bad_copy):
 
 
 def test_slot_count_mismatch_is_caught():
-    with pytest.raises(NamingError, match="슬롯 수"):
+    with pytest.raises(NamingError, match="어느 형식에도"):
         AdName.parse("26Regular_YulmuMask_Video_카피_SPF.YulmuMask.PDP_260429")
 
 
