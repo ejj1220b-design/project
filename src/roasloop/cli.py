@@ -334,6 +334,39 @@ def cmd_doctor(args, cfg: Config) -> None:
         else:
             print(f"  {ok} {name}: {_mask(value)}")
 
+    print("\n■ 토큰 유효기간")
+    try:
+        creds = MetaCredentials.from_env()
+        probe = MetaClient(creds.access_token, creds.ad_account_id, max_retries=0)
+        info = probe.get("debug_token", {
+            "input_token": creds.access_token, "access_token": creds.access_token,
+        }).get("data", {})
+        expires = int(info.get("expires_at") or 0)
+        if expires == 0:
+            print(f"  {ok} 만료 없음 (시스템 사용자 토큰)")
+        else:
+            when = datetime.fromtimestamp(expires)
+            left = (when - datetime.now()).total_seconds() / 3600
+            if left <= 0:
+                print(f"  {bad} 이미 만료됨 — {when:%Y-%m-%d %H:%M}")
+                problems.append("토큰이 만료됐습니다. 새로 발급한 뒤 '액세스 토큰 확장' 으로 60일짜리를 만드세요.")
+            elif left < 48:
+                print(f"  {bad} {when:%Y-%m-%d %H:%M} 만료 — {left:.0f}시간 남음")
+                problems.append(
+                    "토큰 수명이 얼마 안 남았습니다. developers.facebook.com/tools/debug/accesstoken 에서 "
+                    "'액세스 토큰 확장' 을 눌러 60일짜리로 바꾸세요."
+                )
+            else:
+                print(f"  {ok} {when:%Y-%m-%d %H:%M} 만료 — {left / 24:.0f}일 남음")
+        scopes = info.get("scopes") or []
+        if scopes:
+            need = "ads_read" in scopes
+            print(f"  {ok if need else bad} 권한: {', '.join(scopes)}")
+            if not need:
+                problems.append("ads_read 권한이 없습니다. 권한을 넣어 다시 발급하세요.")
+    except Exception as exc:                        # noqa: BLE001
+        print(f"  - 확인 실패 ({str(exc).splitlines()[0]})")
+
     print("\n■ Meta API 연결")
     try:
         creds = MetaCredentials.from_env()
@@ -349,7 +382,14 @@ def cmd_doctor(args, cfg: Config) -> None:
     except MetaAPIError as exc:
         print(f"  {bad} 접속 실패 — {exc}")
         if exc.code == 190:
-            problems.append("토큰이 잘못됐거나 만료됐습니다. 그래프 API 탐색기에서 새로 발급하세요.")
+            if "expired" in exc.message.lower():
+                problems.append(
+                    "토큰이 만료됐습니다. 그래프 API 탐색기에서 새로 받은 뒤, "
+                    "developers.facebook.com/tools/debug/accesstoken 에서 '액세스 토큰 확장' 을 눌러 "
+                    "60일짜리로 바꾸세요. 탐색기가 주는 토큰은 1~2시간이면 죽습니다."
+                )
+            else:
+                problems.append("토큰이 잘못됐습니다. 그래프 API 탐색기에서 새로 발급하세요.")
         elif exc.code in (100, 200, 10):
             problems.append("토큰 권한이 모자랍니다. ads_read 권한을 넣어 다시 발급하세요.")
         else:
@@ -689,6 +729,14 @@ def main(argv: list[str] | None = None) -> int:
         args.func(args, Config.load(args.config))
     except (RuntimeError, FileNotFoundError, ValueError) as exc:
         # OwnershipError 는 RuntimeError 하위라 여기서 함께 잡힌다
+        if "expired" in str(exc).lower():
+            print("오류: Meta 토큰이 만료됐습니다.\n", file=sys.stderr)
+            print("  그래프 API 탐색기가 주는 토큰은 1~2시간이면 죽습니다. 60일짜리로 바꾸세요:", file=sys.stderr)
+            print("    1. developers.facebook.com/tools/explorer 에서 토큰을 새로 받는다", file=sys.stderr)
+            print("    2. developers.facebook.com/tools/debug/accesstoken 에 붙여넣고 [디버그]", file=sys.stderr)
+            print("    3. 맨 아래 [액세스 토큰 확장] 을 누르고, 새로 나온 토큰을 .env 에 넣는다", file=sys.stderr)
+            print("\n  확인: roasloop doctor", file=sys.stderr)
+            return 1
         print(f"오류: {exc}", file=sys.stderr)
         return 1
     return 0
