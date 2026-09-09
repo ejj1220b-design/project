@@ -44,7 +44,7 @@ plan ──▶ launch ──▶ (며칠 태운다) ──▶ harvest ──▶ j
 | `launch` | **있음** | 명세대로 Meta에 대량 생성 (기본 dry-run · 기본 PAUSED · 내 캠페인만) |
 | `harvest` | 없음 | 광고 단위 성과 수집 |
 | `judge` | 없음 | ROAS 컷 판정 → KILL / KEEP / SCALE / INSUFFICIENT + 소유별 제안 목록 |
-| `report` | 없음 | 대행사·상급자에게 그대로 보낼 마크다운 보고서 |
+| `report` | 없음 | 브라우저용 HTML + 텍스트용 마크다운 보고서 |
 | `dna` | 없음 | 살아남은 축(카피 앵글·오브제·소재유형) 분석 → 다음 라운드 축 |
 | `breed` | 없음 | 승자 DNA로 새 카피 + 촬영 기획안 생성 → matrix 블록 |
 | `apply` | **있음** | 중단 제안을 실제로 반영 (내 캠페인만 · `--yes` 필요) |
@@ -72,6 +72,8 @@ roasloop launch data/runs/20260908/plan_R1.csv --execute   # PAUSED 로 생성�
 roasloop harvest --days 14
 roasloop judge
 roasloop report --period "2026-08-26 ~ 09-08"    # 대행사에 보낼 보고서
+# → report.html  브라우저에서 열어보고, 인쇄하면 PDF
+# → report.md    메일·메신저에 붙여 넣을 때
 
 # 내 캠페인의 중단 제안만 반영하려면
 roasloop apply            # 대상만 보여줌

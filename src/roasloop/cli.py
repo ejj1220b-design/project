@@ -442,13 +442,26 @@ def cmd_report(args, cfg: Config) -> None:
             fallback_aov=float(conf.get("fallback_aov", 0)),
         )
 
+    period = args.period or run.name
     text = rp.markdown_report(
         judgements, dna_report, cfg.ownership,
-        period=args.period or run.name, currency=cfg.currency,
-        excluded=dropped,
+        period=period, currency=cfg.currency, excluded=dropped,
     )
-    out = rp.write_markdown(text, Path(args.out) if args.out else run / "report.md")
-    print(f"→ {out}")
+    md_out = rp.write_markdown(text, Path(args.out) if args.out else run / "report.md")
+
+    from . import html as html_rp
+
+    html_out = html_rp.write(
+        html_rp.render(
+            judgements, dna_report, cfg.ownership,
+            period=period, currency=cfg.currency, excluded=dropped, rules=cfg.rules,
+        ),
+        (Path(args.out).with_suffix(".html") if args.out else run / "report.html"),
+    )
+    print(f"→ {html_out.resolve()}")
+    print("   브라우저용. 이 파일을 더블클릭하면 열립니다. 인쇄하면 PDF 로도 됩니다.")
+    print(f"→ {md_out}")
+    print("   텍스트용. 메일이나 메신저에 붙여 넣을 때 씁니다.")
     if args.show:
         print()
         print(text)
