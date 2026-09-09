@@ -177,3 +177,83 @@ def next_round_axes(
         if picked:
             out[axis] = picked
     return out
+
+
+# --------------------------------------------------------- 소유별 비교 · 정보 수집
+@dataclass
+class Steal:
+    """대행사가 지출로 검증했는데 내가 아직 안 쓴 축의 값.
+
+    대행사가 쓴 돈은 이미 나갔다. 거기서 나온 학습은 가져오는 것이 맞다.
+    """
+
+    axis: str
+    value: str
+    their_roas: float
+    their_lower: float
+    their_spend: float
+    their_ads: int
+    confounded: list[str]
+
+
+@dataclass
+class OwnerSplit:
+    mine: DnaReport
+    agency: DnaReport
+    steals: list[Steal]
+    my_edge: list[Steal]      # 내가 이겼고 대행사는 안 쓰는 축
+
+
+def _levels(report: DnaReport, axis: str) -> dict[str, AxisLevel]:
+    return {lv.value: lv for lv in report.axes.get(axis, [])}
+
+
+def compare_owners(
+    judgements: list[Judgement],
+    ownership,
+    level: float = 0.80,
+    fallback_aov: float = 0.0,
+    min_ads: int = 2,
+    min_lower: float | None = None,
+) -> OwnerSplit:
+    """소유별로 DNA 를 따로 뽑고, 한쪽만 검증한 승자를 찾아낸다.
+
+    '가져올 가치가 있는가' 의 기준은 상대의 자기 평균이 아니라 **받는 쪽의 평균**이다.
+    대행사 안에서 몇 등인지는 나와 상관이 없다. 내가 지금 얻는 것보다 확실히 나아야
+    가져올 이유가 생긴다. min_lower 를 주면 그 위에 하한선을 하나 더 건다
+    (보통 목표 ROAS — 나보다 나아도 목표에 못 미치면 가져올 이유가 없다).
+    """
+    from .ownership import Owner
+
+    groups = ownership.split(judgements, key=lambda j: j.perf.campaign_name, for_report=True)
+    mine = build(groups[Owner.MINE], level, fallback_aov)
+    agency = build(groups[Owner.AGENCY], level, fallback_aov)
+
+    def _find(source: DnaReport, other: DnaReport) -> list[Steal]:
+        bar = max(other.baseline_roas, min_lower or 0.0)
+        found: list[Steal] = []
+        for axis in DNA_AXES:
+            theirs = _levels(source, axis)
+            ours = _levels(other, axis)
+            for value, lv in theirs.items():
+                if lv.ads < min_ads or lv.interval is None:
+                    continue
+                if lv.interval.lower < bar:
+                    continue
+                mine_lv = ours.get(value)
+                # 내가 아예 안 썼거나, 썼어도 표본이 없어 판단이 안 되는 경우
+                if mine_lv is not None and mine_lv.ads >= min_ads:
+                    continue
+                found.append(Steal(
+                    axis=axis, value=value,
+                    their_roas=lv.roas, their_lower=lv.interval.lower,
+                    their_spend=lv.spend, their_ads=lv.ads, confounded=lv.confounded,
+                ))
+        found.sort(key=lambda s: -s.their_lower)
+        return found
+
+    return OwnerSplit(
+        mine=mine, agency=agency,
+        steals=_find(agency, mine),
+        my_edge=_find(mine, agency),
+    )

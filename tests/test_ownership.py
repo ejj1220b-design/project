@@ -91,3 +91,30 @@ def test_launcher_refuses_foreign_campaign(own):
     result = launcher.launch([spec], {})
     assert result.created_ads == [] and result.planned == []
     assert "대행사 캠페인" in result.failures[0][1]
+
+
+# ----------------------------------------------- 집계 분류 vs 실행 권한
+def test_report_bucket_can_claim_unknown_without_granting_action():
+    """분류 안 된 캠페인을 '내 성과' 로 세더라도 실행 권한은 열리면 안 된다."""
+    o = Ownership({"agency": [{"pattern": "^E_US"}], "treat_unknown_as": "mine"})
+    from roasloop.ownership import Owner
+
+    assert o.report_bucket("IH_US_Yulmu_test") is Owner.MINE       # 집계는 내 것
+    assert o.classify("IH_US_Yulmu_test") is Owner.UNKNOWN         # 분류는 미분류
+    assert not o.classify("IH_US_Yulmu_test").actionable
+    with pytest.raises(OwnershipError):
+        o.require_mine("IH_US_Yulmu_test")
+
+
+def test_report_bucket_defaults_to_separate():
+    o = Ownership({"agency": [{"pattern": "^E_US"}]})
+    from roasloop.ownership import Owner
+
+    assert o.report_bucket("무언가") is Owner.UNKNOWN
+
+
+def test_report_bucket_never_overrides_explicit_agency():
+    o = Ownership({"agency": [{"pattern": "^E_US"}], "treat_unknown_as": "mine"})
+    from roasloop.ownership import Owner
+
+    assert o.report_bucket("E_US_Meta_DA_SPF_EN_Yulmu_Conversion_ASC") is Owner.AGENCY

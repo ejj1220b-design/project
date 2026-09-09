@@ -39,6 +39,10 @@ class Ownership:
             Owner.MINE: "인하우스", Owner.AGENCY: "대행사", Owner.UNKNOWN: "미분류",
             **{Owner(k): v for k, v in (config.get("labels") or {}).items() if k in Owner._value2member_map_},
         }
+        # 리포팅에서만 쓰는 분류. 실행 권한(require_mine)에는 영향을 주지 않는다.
+        # 규칙에 안 걸린 캠페인을 성과 비교에서 어느 쪽으로 셀지만 정한다.
+        raw = str(config.get("treat_unknown_as", "separate")).lower()
+        self.unknown_reports_as = Owner(raw) if raw in {"mine", "agency"} else Owner.UNKNOWN
 
     @staticmethod
     def _compile(rules) -> list[tuple[str, object]]:
@@ -92,9 +96,19 @@ class Ownership:
             "  안전을 위해 건드리지 않았습니다. 내 캠페인이 맞다면 config/ownership.yaml 의 mine 에 추가하세요."
         )
 
-    def split(self, items, key=lambda x: x) -> dict[Owner, list]:
+    def report_bucket(self, campaign_name: str) -> Owner:
+        """성과 비교에서 어느 쪽으로 셀지. 실행 권한과는 무관하다.
+
+        분류되지 않은 캠페인을 매번 목록에 적지 않고도 '내 성과' 로 셀 수 있게 한다.
+        계정을 바꾸는 경로는 여전히 classify() 와 require_mine() 만 본다.
+        """
+        owner = self.classify(campaign_name)
+        return self.unknown_reports_as if owner is Owner.UNKNOWN else owner
+
+    def split(self, items, key=lambda x: x, for_report: bool = False) -> dict[Owner, list]:
         """항목들을 소유별로 나눈다. key 는 캠페인명을 꺼내는 함수."""
+        pick = self.report_bucket if for_report else self.classify
         out: dict[Owner, list] = {o: [] for o in Owner}
         for item in items:
-            out[self.classify(key(item))].append(item)
+            out[pick(key(item))].append(item)
         return out

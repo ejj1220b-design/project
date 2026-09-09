@@ -9,7 +9,9 @@
     roasloop judge    ROAS 컷 판정 → 표 + CSV
     roasloop campaigns 캠페인 목록과 소유 분류 확인
     roasloop report   대행사·상급자에게 공유할 보고서 (마크다운)
+    roasloop scoreboard 인하우스 vs 대행사 (물량 · 효율 · 학습)
     roasloop dna      살아남은 축 분석 → 다음 라운드 축
+                      --by-owner 를 붙이면 대행사가 검증한 승자를 찾아낸다
     roasloop breed    승자 DNA → 새 카피·기획안 → matrix 블록
     roasloop apply    중단 제안을 실제로 반영 (내 캠페인만, --yes 필요)
 
@@ -90,6 +92,17 @@ def _latest_run() -> Path:
 def _load_perf(path: Path) -> list[AdPerformance]:
     data = json.loads(path.read_text(encoding="utf-8"))
     return [AdPerformance(**row) for row in data]
+
+
+def _window(run: Path) -> tuple[date, date] | None:
+    p = run / "window.json"
+    if not p.exists():
+        return None
+    try:
+        w = json.loads(p.read_text(encoding="utf-8"))
+        return date.fromisoformat(w["since"]), date.fromisoformat(w["until"])
+    except (ValueError, KeyError):
+        return None
 
 
 def _scoped(run: Path, cfg: Config) -> tuple[list[AdPerformance], list[tuple]]:
@@ -231,9 +244,16 @@ def cmd_harvest(args, cfg: Config) -> None:
             print("      조회 기간을 그대로 가동 일수로 씁니다. 최근 만든 광고가")
             print("      실제보다 오래 돌아간 것처럼 잡힐 수 있습니다.")
 
-    out = _run_dir(args.stamp) / "perf.json"
+    run = _run_dir(args.stamp)
+    out = run / "perf.json"
     out.write_text(
         json.dumps([asdict(p) for p in perfs], ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    # 조회 기간을 남긴다. 스코어보드의 '신규 소재 수' 가 이 창을 기준으로 센다.
+    (run / "window.json").write_text(
+        json.dumps({"since": since.isoformat(), "until": until.isoformat(),
+                    "campaign_filter": args.campaign or ""}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
     spend = sum(p.spend for p in perfs)
     revenue = sum(p.revenue for p in perfs)
@@ -466,6 +486,40 @@ def cmd_campaigns(args, cfg: Config) -> None:
         print("\n※ 내 캠페인으로 분류된 것이 없어 apply/launch 는 아무것도 하지 않습니다.")
 
 
+def cmd_scoreboard(args, cfg: Config) -> None:
+    """인하우스 vs 대행사. 물량과 효율을 같은 화면에서 본다."""
+    from . import scoreboard as sb
+
+    run = Path(args.run) if args.run else _latest_run()
+    perfs, dropped = _scoped(run, cfg)
+    judgements = judge_all(perfs, cfg.rules)
+    window = _window(run)
+    period = args.period or (f"{window[0]} ~ {window[1]}" if window else run.name)
+
+    board = sb.build(judgements, cfg.ownership, window=window, period=period)
+    _print_excluded(dropped, cfg.currency)
+
+    print(f"■ 스코어보드 · {period}\n")
+    m, a = board.mine, board.agency
+    print(f"{'':<18}{m.label:>14}{a.label:>14}{'차이':>12}")
+    print("─" * 58)
+    for label, mine_v, agency_v, diff, winning in board.rows():
+        if label.startswith("―"):
+            print(f"\n{label}")
+            continue
+        mark = "" if winning is None else ("  ▲" if winning else "  ▽")
+        print(f"{label:<18}{mine_v:>14}{agency_v:>14}{diff:>12}{mark}")
+
+    vol, eff, notes = board.verdict()
+    print("\n" + "─" * 58)
+    print(f"물량 {'앞섬 ▲' if vol else '뒤짐 ▽'}    효율 {'앞섬 ▲' if eff else '뒤짐 ▽'}")
+    for note in notes:
+        print(f"\n  · {note}")
+
+    if not window:
+        print("\n※ 신규 소재 수는 조회 기간 정보가 있어야 셉니다. harvest 를 다시 실행하면 기록됩니다.")
+
+
 def cmd_report(args, cfg: Config) -> None:
     """대행사·상급자에게 그대로 보낼 보고서를 만든다. 계정은 건드리지 않는다."""
     from . import dna as dna_mod
@@ -566,6 +620,40 @@ def cmd_dna(args, cfg: Config) -> None:
         level=float(conf.get("level", 0.80)),
         fallback_aov=float(conf.get("fallback_aov", 0)),
     )
+
+    if args.by_owner:
+        split = dna_mod.compare_owners(
+            judgements, cfg.ownership,
+            level=float(conf.get("level", 0.80)),
+            fallback_aov=float(conf.get("fallback_aov", 0)),
+            min_ads=args.min_ads,
+            min_lower=float(cfg.rules.get("targets", {}).get("target_roas", 0)),
+        )
+        labels = {"copy": "카피 앵글", "object": "오브제", "creative_type": "소재유형",
+                  "product": "상품", "promo": "프로모션"}
+        print(f"[인하우스] 기준선 ROAS {split.mine.baseline_roas:.2f}")
+        print(rp.dna_table(split.mine, top=args.top, min_ads=args.min_ads))
+        print(f"\n[대행사] 기준선 ROAS {split.agency.baseline_roas:.2f}")
+        print(rp.dna_table(split.agency, top=args.top, min_ads=args.min_ads))
+
+        print("\n" + "═" * 62)
+        if split.steals:
+            print(f"■ 대행사가 검증했는데 내가 아직 안 쓴 축 {len(split.steals)}개")
+            print(f"  내 기준선 ROAS {split.mine.baseline_roas:.2f} 보다 확실히 나은 것만 골랐습니다.")
+            print("  대행사가 쓴 돈은 이미 나갔습니다. 학습만 가져오세요.\n")
+            for st in split.steals[:12]:
+                flag = "  ⚠교란" if st.confounded else ""
+                print(f"  {labels.get(st.axis, st.axis)}  {st.value}")
+                print(f"      대행사 광고 {st.their_ads}개 · 지출 {st.their_spend:,.0f} · "
+                      f"ROAS {st.their_roas:.2f} (하단 {st.their_lower:.2f}){flag}")
+        else:
+            print("■ 대행사에서 가져올 만한 검증된 축이 없습니다.")
+        if split.my_edge:
+            print(f"\n■ 내가 검증했고 대행사는 안 쓰는 축 {len(split.my_edge)}개 — 내 우위입니다")
+            for st in split.my_edge[:8]:
+                print(f"  {labels.get(st.axis, st.axis)}  {st.value}  "
+                      f"(광고 {st.their_ads}개 · ROAS {st.their_roas:.2f})")
+        return
 
     print(rp.dna_table(report, top=args.top, min_ads=args.min_ads))
     axes = dna_mod.next_round_axes(report, keep_top=args.keep_top, min_ads=args.min_ads)
@@ -686,6 +774,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--all", action="store_true", help="종료된 캠페인까지 전부")
     sp.set_defaults(func=cmd_campaigns)
 
+    sp = sub.add_parser("scoreboard", help="인하우스 vs 대행사 비교 (읽기 전용)")
+    sp.add_argument("--run")
+    sp.add_argument("--period", help="화면에 표시할 기간 표기")
+    sp.set_defaults(func=cmd_scoreboard)
+
     sp = sub.add_parser("report", help="공유용 보고서 생성 (읽기 전용)")
     sp.add_argument("--run")
     sp.add_argument("--out", help="저장 경로 (기본 <런>/report.md)")
@@ -699,6 +792,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--top", type=int, default=5)
     sp.add_argument("--keep-top", type=int, default=2, help="다음 라운드에 넘길 축당 값 개수")
     sp.add_argument("--min-ads", type=int, default=2, help="이 개수 미만인 값은 순위에서 뺀다")
+    sp.add_argument("--by-owner", action="store_true",
+                    help="인하우스와 대행사를 갈라서 보고, 한쪽만 검증한 축을 찾는다")
     sp.set_defaults(func=cmd_dna)
 
     sp = sub.add_parser("apply", help="중단 제안 반영 (내 캠페인만)")
