@@ -36,6 +36,8 @@ class Side:
     losers: int = 0
     judgeable: int = 0
     copy_angles: set[str] = field(default_factory=set)
+    #: 앵글별 광고 수. 앵글이 몇 개의 소재로 검증됐는지가 학습 속도를 결정한다.
+    angle_ads: dict[str, int] = field(default_factory=dict)
 
     @property
     def roas(self) -> float:
@@ -52,6 +54,20 @@ class Side:
     @property
     def spend_per_ad(self) -> float:
         return self.spend / self.ads if self.ads else 0.0
+
+    @property
+    def ads_per_angle(self) -> float:
+        """앵글 하나를 몇 개의 소재로 검증하고 있는가.
+
+        1에 가까우면 소재마다 앵글이 달라 표본이 쌓이지 않는다. 광고를 아무리 많이
+        올려도 어느 앵글이 좋았는지 알 수 없고, 다음 라운드가 나아지지 않는다.
+        """
+        return self.ads / len(self.copy_angles) if self.copy_angles else 0.0
+
+    @property
+    def testable_angles(self) -> int:
+        """소재 2개 이상으로 검증 중인 앵글 수. 이 숫자만큼만 결론이 나온다."""
+        return sum(1 for n in self.angle_ads.values() if n >= 2)
 
 
 @dataclass
@@ -94,6 +110,10 @@ class Scoreboard:
              diff_num(m.cpa, a.cpa) if (m.cpa and a.cpa) else "—",
              wins(m.cpa, a.cpa, lower_is_better=True) if (m.cpa and a.cpa) else None),
             ("― 학습", "", "", "", None),
+            ("앵글당 소재", f"{m.ads_per_angle:.1f}", f"{a.ads_per_angle:.1f}",
+             f"{m.ads_per_angle - a.ads_per_angle:+.1f}", wins(m.ads_per_angle, a.ads_per_angle)),
+            ("검증 중인 앵글", n(m.testable_angles), n(a.testable_angles),
+             diff_num(m.testable_angles, a.testable_angles), wins(m.testable_angles, a.testable_angles)),
             ("판정 가능 비율", f"{m.judgeable_rate:.0%}", f"{a.judgeable_rate:.0%}",
              f"{(m.judgeable_rate - a.judgeable_rate) * 100:+.0f}%p",
              wins(round(m.judgeable_rate, 2), round(a.judgeable_rate, 2))),
@@ -144,6 +164,15 @@ class Scoreboard:
         else:
             notes.append("물량과 효율 둘 다 뒤집니다. 먼저 효율 한 축을 골라 좁게 이기는 편이 낫습니다.")
 
+        if m.copy_angles and m.ads_per_angle < 2.0 and m.ads >= 10:
+            suggest = max(3, round(m.ads / 4))
+            notes.append(
+                f"앵글 하나당 소재가 {m.ads_per_angle:.1f}개뿐입니다 "
+                f"(광고 {m.ads}개 / 앵글 {len(m.copy_angles)}종). 앵글마다 소재가 한두 개면 "
+                f"어느 앵글이 좋았는지 결론이 안 납니다. 지금 검증되고 있는 앵글은 "
+                f"{m.testable_angles}종뿐입니다. 물량은 그대로 두고 앵글 수를 "
+                f"{suggest}종 안팎으로 줄여 앵글당 소재를 3~5개로 만드세요."
+            )
         if m.judgeable_rate < 0.5 and m.ads >= 10:
             notes.append(
                 f"내 광고의 {1 - m.judgeable_rate:.0%} 가 판정선에 못 미칩니다 "
@@ -188,6 +217,7 @@ def build(
             except NamingError:
                 continue
             side.copy_angles.add(ad.copy)
+            side.angle_ads[ad.copy] = side.angle_ads.get(ad.copy, 0) + 1
             if window and _within(ad.live_date, window):
                 side.new_creatives += 1
         sides[owner] = side
