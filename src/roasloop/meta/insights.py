@@ -122,23 +122,31 @@ def fetch_daily(
     return out
 
 
-def fetch_days_active(client: MetaClient, ad_ids: list[str]) -> dict[str, int]:
-    """광고별 실제 가동 일수. 기간 전체를 돌지 않은 광고를 게이트에서 구제한다.
+#: effective_status 가 이 값일 때만 '지금 라이브' 로 본다.
+#: ADSET_PAUSED / CAMPAIGN_PAUSED 는 광고 자체는 켜져 있어도 부모가 꺼져 노출되지 않는다.
+LIVE_STATUS = "ACTIVE"
 
-    insights 의 time_range 는 조회 기간일 뿐 광고의 나이가 아니다. 어제 만든 광고도
-    30일 조회에서는 days_active=30 으로 잡혀서, 게이트를 부당하게 통과해 버린다.
 
-    구현 주의: 예전에는 `?ids=a,b,c` 로 여러 개를 한 번에 조회했으나 v26.0 부터 없어졌다.
-    지금은 계정의 ads 엣지를 광고 ID 로 필터링해서 가져온다.
+def fetch_ad_meta(client: MetaClient, ad_ids: list[str]) -> dict[str, dict]:
+    """광고별 나이와 현재 상태.
+
+    나이가 필요한 이유: insights 의 time_range 는 조회 기간일 뿐 광고의 나이가 아니다.
+    어제 만든 광고도 30일 조회에서는 days_active=30 으로 잡혀 게이트를 부당 통과한다.
+
+    상태가 필요한 이유: 조회 기간에 돌았던 광고는 지금 꺼져 있어도 성과에 잡힌다.
+    이미 꺼진 광고를 두고 '끄세요' 라고 제안하면 목록이 소음이 된다.
+
+    구현 주의: 예전에는 `?ids=a,b,c` 로 한 번에 조회했으나 v26.0 부터 없어졌다.
+    계정의 ads 엣지를 광고 ID 로 필터링해서 가져온다.
     """
-    out: dict[str, int] = {}
+    out: dict[str, dict] = {}
     today = datetime.now(timezone.utc).date()
     wanted = set(ad_ids)
 
     for i in range(0, len(ad_ids), 50):
         chunk = ad_ids[i : i + 50]
         params = {
-            "fields": "id,created_time",
+            "fields": "id,created_time,effective_status",
             "limit": 200,
             "filtering": json.dumps(
                 [{"field": "ad.id", "operator": "IN", "value": chunk}]
@@ -149,11 +157,17 @@ def fetch_days_active(client: MetaClient, ad_ids: list[str]) -> dict[str, int]:
             if ad_id not in wanted:
                 continue
             try:
-                created_date = datetime.strptime(obj.get("created_time", "")[:10], "%Y-%m-%d").date()
-                out[ad_id] = max(1, (today - created_date).days)
+                created = datetime.strptime(obj.get("created_time", "")[:10], "%Y-%m-%d").date()
+                age = max(1, (today - created).days)
             except ValueError:
-                out[ad_id] = 1
+                age = 1
+            out[ad_id] = {"age_days": age, "status": obj.get("effective_status", "")}
     return out
+
+
+def fetch_days_active(client: MetaClient, ad_ids: list[str]) -> dict[str, int]:
+    """나이만 필요한 경우의 얇은 래퍼."""
+    return {k: v["age_days"] for k, v in fetch_ad_meta(client, ad_ids).items()}
 
 
 def apply_true_age(perfs: list[AdPerformance], ages: dict[str, int]) -> list[AdPerformance]:
@@ -161,6 +175,17 @@ def apply_true_age(perfs: list[AdPerformance], ages: dict[str, int]) -> list[AdP
     for p in perfs:
         if p.ad_id in ages:
             p.days_active = min(p.days_active, ages[p.ad_id])
+    return perfs
+
+
+def apply_meta(perfs: list[AdPerformance], meta: dict[str, dict]) -> list[AdPerformance]:
+    """나이와 상태를 성과 행에 반영한다."""
+    for p in perfs:
+        info = meta.get(p.ad_id)
+        if not info:
+            continue
+        p.days_active = min(p.days_active, info["age_days"])
+        p.status = info.get("status", "")
     return perfs
 
 

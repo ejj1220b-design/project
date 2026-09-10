@@ -40,6 +40,22 @@ class AdPerformance:
     clicks: int = 0
     frequency: float = 0.0
     days_active: int = 0
+    #: Meta 의 effective_status. 빈 값이면 조회하지 못한 것이라 '모름' 으로 다룬다.
+    status: str = ""
+
+    @property
+    def is_live(self) -> bool:
+        """지금 노출되고 있는가. 상태를 모르면 살아 있다고 본다 — 놓치는 쪽이 낫다."""
+        return self.status in ("", "ACTIVE")
+
+    @property
+    def status_label(self) -> str:
+        return {
+            "": "상태 모름", "ACTIVE": "라이브", "PAUSED": "꺼짐",
+            "ADSET_PAUSED": "광고셋 꺼짐", "CAMPAIGN_PAUSED": "캠페인 꺼짐",
+            "ARCHIVED": "보관됨", "DELETED": "삭제됨", "DISAPPROVED": "심사 거부",
+            "PENDING_REVIEW": "심사 중", "IN_PROCESS": "처리 중",
+        }.get(self.status, self.status)
 
     @property
     def roas(self) -> float:

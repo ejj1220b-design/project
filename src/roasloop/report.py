@@ -126,19 +126,29 @@ def ownership_summary(judgements: list[Judgement], ownership, currency: str = "K
 
 
 def action_list(judgements: list[Judgement], ownership, currency: str = "KRW") -> str:
-    """제안 목록. roasloop 은 이걸 실행하지 않는다 — 사람이 보고 결정한다."""
+    """제안 목록. roasloop 은 이걸 실행하지 않는다 — 사람이 보고 결정한다.
+
+    이미 꺼진 광고는 중단 제안에서 뺀다. 조회 기간에 돌았던 광고는 지금 꺼져 있어도
+    성과에 잡히는데, 그걸 두고 '끄세요' 라고 하면 목록이 소음이 된다.
+    """
     from .ownership import Owner
 
-    kills = [j for j in judgements if j.verdict == Verdict.KILL]
+    all_kills = [j for j in judgements if j.verdict == Verdict.KILL]
+    kills = [j for j in all_kills if j.perf.is_live]
+    already_off = [j for j in all_kills if not j.perf.is_live]
     scales = [j for j in judgements if j.verdict == Verdict.SCALE]
     if not kills and not scales:
-        return "제안할 조치가 없습니다."
+        base = "지금 라이브 중인 광고 가운데 제안할 조치가 없습니다."
+        if already_off:
+            base += (f"\n  (목표 미달인 {len(already_off)}개는 이미 꺼져 있습니다 — "
+                     f"해당 지출 {sum(j.perf.spend for j in already_off):,.0f} {currency})")
+        return base
 
     groups = ownership.split(kills, key=lambda j: j.perf.campaign_name)
     out: list[str] = []
 
     if kills:
-        out.append(f"■ 중단 제안 {len(kills)}개 "
+        out.append(f"■ 중단 제안 {len(kills)}개 — 지금 라이브 중인 것만 "
                    f"(해당 지출 {sum(j.perf.spend for j in kills):,.0f} {currency})")
         for owner in (Owner.MINE, Owner.AGENCY, Owner.UNKNOWN):
             rows = groups[owner]
@@ -152,6 +162,10 @@ def action_list(judgements: list[Judgement], ownership, currency: str = "KRW") -
                     f"      지출 {j.perf.spend:,.0f} · ROAS {j.interval.point:.2f} "
                     f"(구간 {j.interval.lower:.2f}~{j.interval.upper:.2f}) · 구매 {j.perf.purchases} — {j.reason}"
                 )
+    if already_off:
+        out.append(f"\n  ※ 목표 미달이지만 이미 꺼진 광고 {len(already_off)}개는 제외했습니다 "
+                   f"(지출 {sum(j.perf.spend for j in already_off):,.0f} {currency}).")
+
     if scales:
         out.append(f"\n■ 확장 제안 {len(scales)}개")
         for j in scales:

@@ -12,6 +12,7 @@
     roasloop campaigns 캠페인 목록과 소유 분류 확인
     roasloop report   대행사·상급자에게 공유할 보고서 (마크다운)
     roasloop names    광고명이 네이밍 규칙과 맞는지 진단
+    roasloop grow     유지 중인 소재에서 확장 후보 발굴
     roasloop steady   꾸준히 오래 구매를 일으킨 소재
     roasloop scoreboard 인하우스 vs 대행사 (물량 · 효율 · 학습)
     roasloop dna      살아남은 축 분석 → 다음 라운드 축
@@ -276,11 +277,14 @@ def cmd_harvest(args, cfg: Config) -> None:
     if perfs and not args.skip_age:
         # 광고 나이는 게이트 정확도를 높이는 보조 정보다. 여기서 실패해도 성과 수집은 살린다.
         try:
-            ages = insights.fetch_days_active(client, [p.ad_id for p in perfs if p.ad_id])
-            insights.apply_true_age(perfs, ages)
+            meta = insights.fetch_ad_meta(client, [p.ad_id for p in perfs if p.ad_id])
+            insights.apply_meta(perfs, meta)
             (_run_dir(args.stamp) / "ages.json").write_text(
-                json.dumps(ages, ensure_ascii=False), encoding="utf-8"
+                json.dumps({k: v["age_days"] for k, v in meta.items()}, ensure_ascii=False),
+                encoding="utf-8",
             )
+            live = sum(1 for p in perfs if p.is_live)
+            print(f"라이브 {live}개 / 이미 꺼짐 {len(perfs) - live}개")
         except Exception as exc:                    # noqa: BLE001
             print(f"참고: 광고 생성일 조회를 건너뜁니다 ({exc})")
             print("      조회 기간을 그대로 가동 일수로 씁니다. 최근 만든 광고가")
@@ -334,9 +338,10 @@ def cmd_judge(args, cfg: Config) -> None:
         print(rp.judgement_table(judgements, cfg.currency, limit=args.limit))
 
     out = rp.write_judgements_csv(judgements, run / "judgement.csv")
+    # 이미 꺼진 광고는 넣지 않는다. apply 가 꺼진 걸 또 끄는 일이 없게.
     mine_kills = [
         j.perf.ad_id for j in judgements
-        if j.verdict == Verdict.KILL and own.is_mine(j.perf.campaign_name)
+        if j.verdict == Verdict.KILL and j.perf.is_live and own.is_mine(j.perf.campaign_name)
     ]
     (run / "kill_ids_mine.txt").write_text("\n".join(mine_kills), encoding="utf-8")
     print(f"\n→ {out}")
@@ -549,6 +554,7 @@ def cmd_guide(args, cfg: Config) -> None:
         "dna": lambda: cmd_dna(_defaults("dna", by_owner=True, brief=True), cfg),
         "judge": lambda: cmd_judge(_defaults("judge", brief=True), cfg),
         "steady": lambda: cmd_steady(_defaults("steady", limit=8, no_spiky=True), cfg),
+        "grow": lambda: cmd_grow(_defaults("grow", limit=5), cfg),
         "report": lambda: cmd_report(_defaults("report"), cfg),
         "names": lambda: cmd_names(_defaults("names"), cfg),
         "doctor": lambda: cmd_doctor(_defaults("doctor"), cfg),
@@ -626,6 +632,7 @@ def _defaults(command: str, **overrides):
     base = dict(
         run=None, stamp=None, period=None, limit=0, brief=False, top=5, keep_top=2,
         min_ads=2, by_owner=False, samples=3, out=None, no_dna=False, show=False,
+        include_paused=False,
         days=14, since=None, until=None, campaign=None, skip_age=False, no_daily=False,
         all=False, no_spiky=False,
         verbose=False,
@@ -713,6 +720,53 @@ def _load_steady(run: Path, cfg: Config):
     scoped = {p.ad_id for p in _scoped(run, cfg)[0]}
     daily = [r for r in daily if r.get("ad_id") in scoped]
     return st.build(daily, cfg.rules, ages, campaigns)
+
+
+def cmd_grow(args, cfg: Config) -> None:
+    """유지 중인 소재에서 키울 것을 찾는다."""
+    from . import grow as gw
+
+    run = Path(args.run) if args.run else _latest_run()
+    print(f"데이터: {_describe_run(run)}\n")
+    perfs, _ = _scoped(run, cfg)
+    judgements = judge_all(perfs, cfg.rules)
+    steady_report = _load_steady(run, cfg)
+    own = cfg.ownership
+
+    cands = gw.build(judgements, cfg.rules, steady_report, live_only=not args.include_paused)
+    keeps = [j for j in judgements if j.verdict == Verdict.KEEP]
+    live_keeps = [j for j in keeps if j.perf.is_live]
+
+    print(f"■ 확장 후보 {len(cands)}개")
+    print(f"  유지(KEEP) {len(keeps)}개 중 라이브 {len(live_keeps)}개를 살펴본 결과입니다.")
+    print("  '지금 좋은 소재' 가 아니라 '예산을 더 주면 증명될 소재' 를 찾습니다.\n")
+
+    if not cands:
+        print("  키울 만한 소재가 없습니다.")
+        print("  유지 중인 소재 대부분이 구매가 없거나 근거가 부족합니다.")
+        return
+
+    for i, c in enumerate(cands[: args.limit], 1):
+        p_, iv = c.perf, c.interval
+        print(f"  {i}. {p_.ad_name}")
+        print(f"     [{own.label(p_.campaign_name)}] ROAS {iv.point:.2f} "
+              f"(구간 {iv.lower:.2f}~{iv.upper:.2f}) · 구매 {p_.purchases} · "
+              f"지출 {p_.spend:,.0f} · 빈도 {p_.frequency:.1f}")
+        for r in c.reasons:
+            print(f"     + {r}")
+        for b in c.blockers:
+            print(f"     − {b}")
+        if c.extra_spend_to_prove:
+            print(f"     → 약 {c.extra_spend_to_prove:,.0f} 을 더 태우면 확장 판정이 납니다")
+        elif c.prove_note:
+            print(f"     → {c.prove_note}")
+        print()
+
+    if not args.include_paused:
+        paused = [j for j in keeps if not j.perf.is_live]
+        if paused:
+            print(f"  ※ 이미 꺼진 유지 소재 {len(paused)}개는 제외했습니다 "
+                  "(--include-paused 로 포함).")
 
 
 def cmd_steady(args, cfg: Config) -> None:
@@ -859,7 +913,7 @@ def cmd_apply(args, cfg: Config) -> None:
     judgements = judge_all(perfs, cfg.rules)
     own = cfg.ownership
 
-    kills = [j for j in judgements if j.verdict == Verdict.KILL]
+    kills = [j for j in judgements if j.verdict == Verdict.KILL and j.perf.is_live]
     groups = own.split(kills, key=lambda j: j.perf.campaign_name)
     mine, blocked = groups[Owner.MINE], groups[Owner.AGENCY] + groups[Owner.UNKNOWN]
 
@@ -1059,7 +1113,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--days", type=int, default=14, help="최근 며칠 (기본 14)")
     sp.add_argument("--since"), sp.add_argument("--until")
     sp.add_argument("--campaign", help="캠페인명 부분일치 필터")
-    sp.add_argument("--skip-age", action="store_true", help="광고 나이 조회를 건너뛴다")
+    sp.add_argument("--skip-age", action="store_true",
+                    help="광고 나이·상태 조회를 건너뛴다 (이미 꺼진 광고를 가릴 수 없게 된다)")
     sp.add_argument("--no-daily", action="store_true", help="날짜별 성과 수집을 건너뛴다")
     sp.add_argument("--stamp")
     sp.set_defaults(func=cmd_harvest)
@@ -1081,6 +1136,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--run")
     sp.add_argument("--samples", type=int, default=5, help="칸 수별로 보여줄 예시 개수")
     sp.set_defaults(func=cmd_names)
+
+    sp = sub.add_parser("grow", help="유지 중인 소재에서 확장 후보 발굴 (읽기 전용)")
+    sp.add_argument("--run")
+    sp.add_argument("--limit", type=int, default=10)
+    sp.add_argument("--include-paused", action="store_true", help="이미 꺼진 소재도 포함")
+    sp.set_defaults(func=cmd_grow)
 
     sp = sub.add_parser("steady", help="꾸준히 오래 구매를 일으킨 소재 (읽기 전용)")
     sp.add_argument("--run")
